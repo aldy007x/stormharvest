@@ -1,0 +1,508 @@
+// STORMHARVEST — render.js
+// Drawing only: world state + current screen in, pixels out. All art is
+// Canvas 2D code — layered parallax storm clouds, a dusk sky that darkens
+// with each storm, animated sea, a coastal town silhouette with lit windows
+// and three battery towers that fill as you harvest, rain, jagged lightning,
+// telegraphed strike rings, particles, and a full HUD (storm banner, quota
+// bar, hull, timer, dash, Storm Lance, upgrade icons). Screens: title (with
+// clickable difficulty + Endless buttons), play, paused, upgrade draft
+// cards, game over and victory. Button rectangles are exported so main.js
+// hit-tests exactly what is drawn.
+
+import { BOSS, DIFFICULTIES, FIELD, FONT, PALETTE, STRIKE } from './config.js';
+import { STORMS, UPGRADES } from './world.js';
+
+export const SCREEN_TITLE = 'title';
+export const SCREEN_PLAY = 'play';
+export const SCREEN_PAUSED = 'paused';
+export const SCREEN_DRAFT = 'draft';
+export const SCREEN_OVER = 'over';
+export const SCREEN_VICTORY = 'victory';
+
+/** Deterministic pseudo-random from an integer seed (for bolt jaggedness / town windows). */
+function seeded(n) { let x = Math.sin(n * 127.1 + 311.7) * 43758.5453; return x - Math.floor(x); }
+
+/** Buttons for a screen, as { id, x, y, w, h, label } in logical coordinates. */
+export function getButtons(screen, state) {
+  const buttons = [];
+  if (screen === SCREEN_TITLE) {
+    const ids = Object.keys(DIFFICULTIES);
+    ids.forEach((id, i) => buttons.push({ id: 'diff:' + id, x: 340 + i * 208, y: 512, w: 192, h: 52, label: DIFFICULTIES[id].label }));
+    buttons.push({ id: 'endless', x: 490, y: 578, w: 300, h: 46, label: state.endlessUnlocked ? '▶  ENDLESS MODE' : '🔒 ENDLESS — win once to unlock' });
+  } else if (screen === SCREEN_DRAFT) {
+    state.draftChoices.forEach((choice, i) => buttons.push({ id: 'upgrade:' + choice.id, x: 92 + i * 380, y: 250, w: 340, h: 250, label: choice.name }));
+  } else if (screen === SCREEN_OVER || screen === SCREEN_VICTORY) {
+    buttons.push({ id: 'restart', x: 490, y: 540, w: 300, h: 54, label: '↻  PLAY AGAIN (R)' });
+    buttons.push({ id: 'title', x: 490, y: 606, w: 300, h: 44, label: 'TITLE' });
+  } else if (screen === SCREEN_PAUSED) {
+    buttons.push({ id: 'resume', x: 490, y: 400, w: 300, h: 52, label: 'RESUME (P)' });
+    buttons.push({ id: 'title', x: 490, y: 464, w: 300, h: 44, label: 'QUIT TO TITLE' });
+  }
+  return buttons;
+}
+
+export function createRenderer(canvas) {
+  const ctx = canvas.getContext('2d');
+  const view = { scale: 1, x: 0, y: 0 };
+  let hover = { x: -999, y: -999 };
+
+  function resize() {
+    const ratio = window.devicePixelRatio || 1;
+    canvas.width = Math.round(window.innerWidth * ratio);
+    canvas.height = Math.round(window.innerHeight * ratio);
+    view.scale = Math.min(canvas.width / FIELD.width, canvas.height / FIELD.height);
+    view.x = (canvas.width - FIELD.width * view.scale) / 2;
+    view.y = (canvas.height - FIELD.height * view.scale) / 2;
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function setHover(x, y) { hover = { x, y }; }
+  const inside = (b) => hover.x >= b.x && hover.x <= b.x + b.w && hover.y >= b.y && hover.y <= b.y + b.h;
+
+  function text(value, x, y, size, color, align = 'left', weight = '') {
+    ctx.font = `${weight} ${size}px ${FONT}`.trim();
+    ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = 'alphabetic';
+    ctx.fillText(value, x, y);
+  }
+  function bar(x, y, w, h, frac, color, back = 'rgba(255,255,255,0.14)') {
+    ctx.fillStyle = back; ctx.fillRect(x, y, w, h);
+    ctx.fillStyle = color; ctx.fillRect(x, y, w * Math.max(0, Math.min(1, frac)), h);
+  }
+
+  // ---- Scenery -------------------------------------------------------------
+  function sky(state) {
+    const dark = state.storm.dark;
+    const top = [26 + (1 - dark) * 30, 30 + (1 - dark) * 22, 66 + (1 - dark) * 40];
+    const grad = ctx.createLinearGradient(0, 0, 0, FIELD.horizonY);
+    grad.addColorStop(0, `rgb(${top[0] | 0},${top[1] | 0},${top[2] | 0})`);
+    grad.addColorStop(0.7, `rgb(${58 - dark * 22},${52 - dark * 14},${96 - dark * 30})`);
+    grad.addColorStop(1, `rgb(${122 - dark * 40},${84 - dark * 26},${92 - dark * 22})`);
+    ctx.fillStyle = grad; ctx.fillRect(0, 0, FIELD.width, FIELD.horizonY + 4);
+    // A bruised moon behind the clouds in late storms.
+    ctx.fillStyle = 'rgba(230,235,255,0.5)';
+    ctx.beginPath(); ctx.arc(1085, 96, 30, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = 'rgba(230,235,255,0.16)';
+    ctx.beginPath(); ctx.arc(1085, 96, 52, 0, Math.PI * 2); ctx.fill();
+  }
+
+  function clouds(state, layer) {
+    for (const c of state.entities.clouds) {
+      if (c.layer !== layer) continue;
+      const shade = 22 + c.shade * 26 - state.storm.dark * 8;
+      ctx.fillStyle = `rgba(${shade + 14},${shade + 16},${shade + 34},${0.55 + layer * 0.18})`;
+      const w = c.w; const h = w * 0.26;
+      ctx.beginPath();
+      ctx.ellipse(c.x, c.y, w / 2, h / 2, 0, 0, Math.PI * 2);
+      ctx.ellipse(c.x - w * 0.28, c.y + h * 0.14, w * 0.3, h * 0.42, 0, 0, Math.PI * 2);
+      ctx.ellipse(c.x + w * 0.3, c.y + h * 0.1, w * 0.32, h * 0.46, 0, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  function seaAndTown(state) {
+    // Sea with animated wave glints.
+    const grad = ctx.createLinearGradient(0, FIELD.horizonY, 0, FIELD.height);
+    grad.addColorStop(0, PALETTE.sea1); grad.addColorStop(1, PALETTE.sea2);
+    ctx.fillStyle = grad; ctx.fillRect(0, FIELD.horizonY, FIELD.width, FIELD.height - FIELD.horizonY);
+    ctx.strokeStyle = 'rgba(140,190,230,0.35)'; ctx.lineWidth = 2;
+    for (let i = 0; i < 26; i += 1) {
+      const wx = seeded(i * 3) * FIELD.width + Math.sin(state.elapsed * 1.4 + i) * 16;
+      const wy = FIELD.horizonY + 12 + seeded(i * 7) * 52;
+      ctx.beginPath(); ctx.moveTo(wx, wy); ctx.lineTo(wx + 26 + seeded(i) * 30, wy); ctx.stroke();
+    }
+    // Coastal town silhouette: houses with lit windows along the shore.
+    ctx.fillStyle = PALETTE.town;
+    ctx.fillRect(0, FIELD.groundY, FIELD.width, FIELD.height - FIELD.groundY);
+    for (let i = 0; i < 22; i += 1) {
+      const hx = i * 60 + seeded(i * 11) * 12;
+      const hh = 26 + seeded(i * 13) * 30;
+      ctx.fillRect(hx, FIELD.groundY - hh, 46, hh);
+      ctx.beginPath(); ctx.moveTo(hx - 4, FIELD.groundY - hh); ctx.lineTo(hx + 23, FIELD.groundY - hh - 14); ctx.lineTo(hx + 50, FIELD.groundY - hh); ctx.fill();
+      for (let wnd = 0; wnd < 3; wnd += 1) {
+        if (seeded(i * 31 + wnd * 7) > 0.42) {
+          ctx.fillStyle = PALETTE.window;
+          ctx.fillRect(hx + 8 + wnd * 13, FIELD.groundY - hh + 10 + (wnd % 2) * 12, 7, 9);
+          ctx.fillStyle = PALETTE.town;
+        }
+      }
+    }
+    // Three battery towers: they fill with charge as the quota climbs.
+    const frac = state.storm.boss ? 1 : (state.quota ? state.battery / state.quota : 0);
+    for (let t = 0; t < 3; t += 1) {
+      const tx = 90 + t * 34; const base = FIELD.groundY; const hgt = 86;
+      ctx.fillStyle = PALETTE.tower; ctx.fillRect(tx, base - hgt, 24, hgt);
+      const fillH = hgt * Math.max(0, Math.min(1, frac * 3 - t));
+      ctx.fillStyle = PALETTE.battery; ctx.fillRect(tx + 4, base - 6 - fillH, 16, fillH);
+      ctx.fillStyle = frac * 3 - t >= 1 ? PALETTE.charge : '#42507a';
+      ctx.beginPath(); ctx.arc(tx + 12, base - hgt - 7, 6, 0, Math.PI * 2); ctx.fill();
+    }
+    text('TOWN BATTERIES', 84, FIELD.groundY + 34, 13, PALETTE.muted, 'left', '700');
+  }
+
+  function rainLayer(state) {
+    ctx.strokeStyle = `rgba(170,200,240,${0.16 + state.storm.dark * 0.14})`;
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    for (const r of state.entities.rain) {
+      ctx.moveTo(r.x, r.y);
+      ctx.lineTo(r.x + state.wind * 9, r.y + r.len);
+    }
+    ctx.stroke();
+  }
+
+  // ---- Entities --------------------------------------------------------------
+  function telegraphs(state) {
+    for (const t of state.entities.telegraphs) {
+      if (!t.active) continue;
+      const frac = t.t / t.total;
+      const radius = (t.mega ? 118 : 92) * (1 - frac * 0.55);
+      const pulse = 0.65 + Math.sin(state.elapsed * 22) * 0.35;
+      ctx.strokeStyle = t.mega ? `rgba(199,146,255,${0.55 + pulse * 0.4})` : `rgba(255,210,87,${0.5 + pulse * 0.45})`;
+      ctx.lineWidth = 3 + frac * 3;
+      ctx.beginPath(); ctx.arc(t.x, t.y, radius, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(t.x, t.y, Math.max(8, radius * (1 - frac)), 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = t.mega ? '#c792ff' : PALETTE.telegraph;
+      ctx.beginPath(); ctx.arc(t.x, t.y, 4 + frac * 4, 0, Math.PI * 2); ctx.fill();
+      text(t.mega ? 'MEGA' : '', t.x, t.y - radius - 8, 13, '#c792ff', 'center', '800');
+      // Cross ticks so the ring reads even in peripheral vision.
+      ctx.strokeStyle = 'rgba(255,230,150,0.8)';
+      for (let k = 0; k < 4; k += 1) {
+        const a = k * Math.PI / 2 + Math.PI / 4;
+        ctx.beginPath();
+        ctx.moveTo(t.x + Math.cos(a) * (radius + 6), t.y + Math.sin(a) * (radius + 6));
+        ctx.lineTo(t.x + Math.cos(a) * (radius + 18), t.y + Math.sin(a) * (radius + 18));
+        ctx.stroke();
+      }
+    }
+    // Catcher radius around the kite, so players can judge a harvest.
+    const k = state.kite;
+    ctx.strokeStyle = 'rgba(120,220,255,0.28)'; ctx.lineWidth = 1.5;
+    ctx.setLineDash([6, 8]);
+    ctx.beginPath(); ctx.arc(k.x, k.y, k.catcher, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  function bolts(state) {
+    for (const b of state.entities.bolts) {
+      if (!b.active) continue;
+      const alpha = 1 - b.life / b.total;
+      const width = b.mega ? 7 : 4.5;
+      for (const pass of [0, 1]) {
+        ctx.strokeStyle = pass === 0 ? `rgba(255,240,150,${alpha * 0.4})` : `rgba(255,255,255,${alpha})`;
+        ctx.lineWidth = pass === 0 ? width * 2.6 : width;
+        ctx.beginPath();
+        let x = b.x; let y = -10;
+        ctx.moveTo(x + (seeded(b.seed) - 0.5) * 90, y);
+        const segments = 9;
+        for (let s = 1; s <= segments; s += 1) {
+          const ny = (b.y + 10) * (s / segments) - 10;
+          const nx = b.x + (seeded(b.seed + s * 17) - 0.5) * (b.mega ? 84 : 56) * (s < segments ? 1 : 0);
+          ctx.lineTo(nx, ny);
+          x = nx; y = ny;
+        }
+        ctx.stroke();
+        void x; void y;
+      }
+      // Scorch / catch glow at the strike point.
+      const glow = ctx.createRadialGradient(b.x, b.y, 2, b.x, b.y, b.mega ? 90 : 60);
+      glow.addColorStop(0, b.caught ? `rgba(255,228,94,${alpha * 0.8})` : `rgba(180,200,255,${alpha * 0.45})`);
+      glow.addColorStop(1, 'rgba(255,228,94,0)');
+      ctx.fillStyle = glow;
+      ctx.beginPath(); ctx.arc(b.x, b.y, b.mega ? 90 : 60, 0, Math.PI * 2); ctx.fill();
+    }
+  }
+
+  function hazards(state) {
+    for (const g of state.entities.gusts) {
+      if (!g.active) continue;
+      const a = Math.sin(Math.min(1, g.life / g.total) * Math.PI) * 0.5;
+      ctx.strokeStyle = `rgba(200,225,255,${a})`; ctx.lineWidth = 3;
+      for (let i = 0; i < 3; i += 1) {
+        const yy = g.y - 22 + i * 22;
+        ctx.beginPath();
+        ctx.moveTo(g.x, yy);
+        ctx.bezierCurveTo(g.x + g.w * 0.3, yy - 12, g.x + g.w * 0.7, yy + 12, g.x + g.w, yy);
+        ctx.stroke();
+      }
+      text(g.dir > 0 ? 'GUST »»' : '«« GUST', g.x + g.w / 2, g.y - 36, 14, 'rgba(200,225,255,0.9)', 'center', '800');
+    }
+    for (const t of state.entities.tornadoes) {
+      if (!t.active) continue;
+      const topY = 120; const baseY = FIELD.horizonY;
+      for (let i = 0; i < 7; i += 1) {
+        const frac = i / 7;
+        const yy = baseY - frac * (baseY - topY);
+        const wdt = 16 + frac * 62 + Math.sin(t.phase + i) * 7;
+        ctx.fillStyle = `rgba(168,184,214,${0.34 + frac * 0.2})`;
+        ctx.beginPath(); ctx.ellipse(t.x + Math.sin(t.phase * 1.3 + i * 0.8) * 9 * frac, yy, wdt, 11, 0, 0, Math.PI * 2); ctx.fill();
+      }
+      text('TORNADO', t.x, topY - 14, 13, '#ffb0b0', 'center', '800');
+    }
+    for (const h of state.entities.hail) {
+      if (!h.active) continue;
+      ctx.save(); ctx.translate(h.x, h.y); ctx.rotate(h.spin);
+      ctx.fillStyle = 'rgba(205,232,255,0.95)';
+      ctx.beginPath();
+      for (let i = 0; i < 6; i += 1) {
+        const a = i * Math.PI / 3;
+        ctx.lineTo(Math.cos(a) * h.r, Math.sin(a) * h.r);
+      }
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.fillRect(-2, -2, 4, 4);
+      ctx.restore();
+    }
+  }
+
+  function bossDraw(state) {
+    const boss = state.boss;
+    if (!boss.active && !state.victory) return;
+    if (state.victory) return;
+    const flash = boss.flash > 0;
+    // The living cloud: stacked dark ellipses with a glowing core eye.
+    for (let i = 0; i < 6; i += 1) {
+      const off = (seeded(i * 41) - 0.5) * 190;
+      const yy = boss.y + (seeded(i * 43) - 0.5) * 44;
+      const wdt = 120 - Math.abs(off) * 0.32;
+      ctx.fillStyle = flash ? 'rgba(120,90,180,0.92)' : `rgba(${34 + i * 4},${32 + i * 3},${58 + i * 6},0.94)`;
+      ctx.beginPath(); ctx.ellipse(boss.x + off, yy, wdt, 44 + seeded(i * 47) * 20, 0, 0, Math.PI * 2); ctx.fill();
+    }
+    const pulse = 0.7 + Math.sin(state.elapsed * 5) * 0.3;
+    const eye = ctx.createRadialGradient(boss.x, boss.y + 6, 2, boss.x, boss.y + 6, 34);
+    eye.addColorStop(0, `rgba(255,120,120,${pulse})`); eye.addColorStop(1, 'rgba(255,60,60,0)');
+    ctx.fillStyle = eye; ctx.beginPath(); ctx.arc(boss.x, boss.y + 6, 34, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(boss.x, boss.y + 6, 6 + pulse * 3, 0, Math.PI * 2); ctx.fill();
+    text(BOSS.name, boss.x, boss.y - 92, 24, '#ffb0b0', 'center', '900');
+    bar(boss.x - 130, boss.y - 78, 260, 13, boss.hp / boss.maxHp, '#ff5d5d');
+    text(`SUPERCELL INTEGRITY ${boss.hp}/${boss.maxHp}`, boss.x, boss.y - 88 - 22, 13, PALETTE.muted, 'center', '700');
+  }
+
+  function kiteDraw(state) {
+    const k = state.kite;
+    if (k.invulnerable > 0 && Math.floor(state.elapsed * 14) % 2 === 0 && k.dashT <= 0) { /* blink */ }
+    else {
+      ctx.save(); ctx.translate(k.x, k.y); ctx.scale(k.facing, 1);
+      ctx.rotate(k.vy * 0.0006);
+      // Kite sail: a bright diamond with ribs and a charged rim.
+      ctx.fillStyle = '#ffb03a';
+      ctx.beginPath(); ctx.moveTo(0, -26); ctx.lineTo(26, 0); ctx.lineTo(0, 26); ctx.lineTo(-26, 0); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#ff7847';
+      ctx.beginPath(); ctx.moveTo(0, -26); ctx.lineTo(26, 0); ctx.lineTo(0, 0); ctx.lineTo(-26, 0); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = '#fff3c4'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.moveTo(0, -26); ctx.lineTo(0, 26); ctx.moveTo(-26, 0); ctx.lineTo(26, 0); ctx.stroke();
+      // Copper harvest rods at the wingtips.
+      ctx.strokeStyle = PALETTE.charge; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(-26, 0); ctx.lineTo(-38, -14); ctx.moveTo(26, 0); ctx.lineTo(38, -14); ctx.stroke();
+      ctx.fillStyle = '#fff6a8';
+      ctx.beginPath(); ctx.arc(-38, -14, 4, 0, Math.PI * 2); ctx.arc(38, -14, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+      // Tail ribbons streaming behind.
+      ctx.strokeStyle = 'rgba(255,176,58,0.75)'; ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      for (let i = 0; i <= 4; i += 1) {
+        const tx = k.x - k.facing * (26 + i * 11);
+        const ty = k.y + 20 + Math.sin(state.elapsed * 9 + i * 1.4) * 6 + i * 3;
+        if (i === 0) ctx.moveTo(tx, ty); else ctx.lineTo(tx, ty);
+      }
+      ctx.stroke();
+      // String down toward the town.
+      ctx.strokeStyle = 'rgba(230,238,255,0.4)'; ctx.lineWidth = 1.2;
+      ctx.beginPath(); ctx.moveTo(k.x, k.y + 24); ctx.lineTo(k.x - 30, FIELD.groundY); ctx.stroke();
+    }
+    if (k.dashT > 0) {
+      ctx.strokeStyle = 'rgba(160,220,255,0.6)'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(k.x, k.y, 34 + (0.22 - k.dashT) * 60, 0, Math.PI * 2); ctx.stroke();
+    }
+  }
+
+  function particlesAndFloaters(state) {
+    for (const p of state.entities.particles) {
+      if (!p.active) continue;
+      const a = 1 - p.life / p.total;
+      ctx.globalAlpha = a; ctx.fillStyle = p.color;
+      ctx.fillRect(p.x - p.size / 2, p.y - p.size / 2, p.size, p.size);
+    }
+    ctx.globalAlpha = 1;
+    for (const f of state.entities.floaters) {
+      if (!f.active) continue;
+      const a = 1 - f.life / f.total;
+      ctx.globalAlpha = Math.min(1, a * 1.6);
+      text(f.text, f.x, f.y, f.size, f.color, 'center', '800');
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ---- HUD ---------------------------------------------------------------------
+  function hud(state, screen) {
+    // Top bar panel.
+    ctx.fillStyle = 'rgba(8,12,26,0.72)'; ctx.fillRect(0, 0, FIELD.width, 64);
+    ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fillRect(0, 64, FIELD.width, 1);
+    text(`STORM ${state.stormIndex + 1}/7 — ${state.storm.name}`, 22, 28, 20, PALETTE.text, 'left', '800');
+    text(state.endless ? `ENDLESS CYCLE ${state.endlessCycle + 1} · ${state.difficulty.label}` : state.difficulty.label, 22, 52, 14, PALETTE.muted, 'left', '600');
+    // Quota / boss centrepiece.
+    if (state.storm.boss) {
+      text('⚡ HARVEST MEGA-BOLTS → CHARGE THE LANCE → SPACE TO FIRE ⚡', FIELD.width / 2, 28, 17, '#c792ff', 'center', '800');
+      bar(FIELD.width / 2 - 170, 38, 340, 14, state.lance / STRIKE.lanceMax, PALETTE.lance);
+      text(state.lance >= STRIKE.lanceMax ? 'LANCE READY — SPACE!' : `Storm Lance ${Math.floor(state.lance)}%`, FIELD.width / 2, 62 - 24 + 24, 13, PALETTE.text, 'center', '700');
+    } else {
+      text(`BATTERY ${state.battery} / ${state.quota}`, FIELD.width / 2, 26, 18, PALETTE.text, 'center', '800');
+      bar(FIELD.width / 2 - 170, 34, 340, 14, state.quota ? state.battery / state.quota : 0, PALETTE.battery);
+    }
+    // Timer (right-top), hull, score, dash.
+    const urgent = state.timeLeft <= 15 && screen === SCREEN_PLAY;
+    text(`⏱ ${Math.ceil(state.timeLeft)}s`, FIELD.width - 22, 28, 22, urgent ? PALETTE.danger : PALETTE.text, 'right', '800');
+    text(`SCORE ${state.score}`, FIELD.width - 22, 54, 15, PALETTE.gold, 'right', '700');
+    // Bottom-left: hull + dash.
+    text('HULL', 22, FIELD.height - 44, 14, PALETTE.muted, 'left', '700');
+    bar(70, FIELD.height - 58, 190, 15, state.kite.hull / state.kite.maxHull, state.kite.hull / state.kite.maxHull < 0.3 ? PALETTE.hullLow : PALETTE.hull);
+    text(`${Math.max(0, Math.ceil(state.kite.hull))}/${state.kite.maxHull}`, 268, FIELD.height - 44, 14, PALETTE.text, 'left', '700');
+    text('DASH', 340, FIELD.height - 44, 14, PALETTE.muted, 'left', '700');
+    bar(388, FIELD.height - 58, 90, 15, state.kite.dashCd <= 0 ? 1 : 1 - state.kite.dashCd / 1.6, '#8fd0ff');
+    // Bottom-right: harvested count + upgrade icons owned.
+    text(`⚡ ${state.harvests} harvested`, FIELD.width - 22, FIELD.height - 44, 15, PALETTE.charge, 'right', '700');
+    let ux = FIELD.width - 22;
+    for (const def of UPGRADES) {
+      const rank = state.upgrades[def.id] || 0;
+      if (!rank) continue;
+      ux -= 30;
+      ctx.fillStyle = 'rgba(20,28,52,0.9)'; ctx.fillRect(ux, FIELD.height - 92, 26, 26);
+      ctx.strokeStyle = PALETTE.panelEdge; ctx.strokeRect(ux, FIELD.height - 92, 26, 26);
+      text(def.icon, ux + 13, FIELD.height - 73, 15, PALETTE.text, 'center');
+      if (rank > 1) text(String(rank), ux + 22, FIELD.height - 70, 10, PALETTE.gold, 'center', '800');
+    }
+    if (state.muted) text('🔇 M', FIELD.width - 22, 84, 14, PALETTE.muted, 'right', '700');
+    // Storm banner for the first seconds of each storm.
+    if (state.bannerT > 0 && screen === SCREEN_PLAY) {
+      const a = Math.min(1, state.bannerT);
+      ctx.globalAlpha = a;
+      ctx.fillStyle = 'rgba(8,12,26,0.66)'; ctx.fillRect(290, 120, 700, 92);
+      ctx.strokeStyle = PALETTE.panelEdge; ctx.strokeRect(290, 120, 700, 92);
+      text(`STORM ${state.stormIndex + 1} OF 7`, FIELD.width / 2, 158, 17, PALETTE.gold, 'center', '800');
+      text(state.storm.name, FIELD.width / 2, 196, 34, PALETTE.text, 'center', '900');
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  // ---- Panels / screens ---------------------------------------------------------
+  function panel(x, y, w, h) {
+    ctx.fillStyle = PALETTE.panel; ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = PALETTE.panelEdge; ctx.lineWidth = 2; ctx.strokeRect(x, y, w, h);
+  }
+  function button(b, accent) {
+    const hot = inside(b);
+    ctx.fillStyle = hot ? 'rgba(60,52,20,0.96)' : PALETTE.card;
+    ctx.fillRect(b.x, b.y, b.w, b.h);
+    ctx.strokeStyle = hot ? PALETTE.cardHover : (accent || PALETTE.cardEdge);
+    ctx.lineWidth = hot ? 3 : 2; ctx.strokeRect(b.x, b.y, b.w, b.h);
+    text(b.label, b.x + b.w / 2, b.y + b.h / 2 + 7, b.h > 50 ? 19 : 16, hot ? PALETTE.gold : PALETTE.text, 'center', '800');
+  }
+
+  function titleScreen(state, best) {
+    text('STORMHARVEST', FIELD.width / 2, 168, 84, PALETTE.text, 'center', '900');
+    text('Ride the kite. Catch the lightning. Keep the town lit.', FIELD.width / 2, 208, 24, PALETTE.gold, 'center', '600');
+    panel(290, 238, 700, 238);
+    text('HOW TO PLAY', FIELD.width / 2, 278, 20, PALETTE.battery, 'center', '800');
+    const lines = [
+      'Lightning is telegraphed: a glowing ring counts down, then the bolt lands.',
+      'Be INSIDE the ring at the strike to harvest charge into the town batteries.',
+      'Fill the quota before the storm timer ends — through all SEVEN storms.',
+      'Dodge hail, gusts and tornadoes. Between storms, draft 1 of 3 upgrades.',
+      'Storm 7: THE SUPERCELL. Harvest its mega-bolts, charge the Storm Lance,',
+      'press SPACE at full charge — three hits bring it down.',
+      'Fly: WASD / arrows or hold mouse · Dash: Shift · Pause: P · Mute: M',
+    ];
+    lines.forEach((line, i) => text(line, FIELD.width / 2, 312 + i * 24, 16.5, PALETTE.muted, 'center'));
+    text(best > 0 ? `Best score: ${best}` : 'Choose your sky:', FIELD.width / 2, 498, 16, PALETTE.muted, 'center', '700');
+    for (const b of getButtons(SCREEN_TITLE, state)) button(b, b.id.startsWith('diff') ? PALETTE.battery : PALETTE.lance);
+    text('Calm = gentler · Tempest = the real storm · Maelstrom = for maniacs', FIELD.width / 2, 652, 14, PALETTE.dim, 'center');
+    text('An original game of wind, wire and lightning — plays fully offline.', FIELD.width / 2, 676, 13, PALETTE.dim, 'center');
+  }
+
+  function draftScreen(state) {
+    ctx.fillStyle = 'rgba(5,8,18,0.62)'; ctx.fillRect(0, 0, FIELD.width, FIELD.height);
+    text('STORM CLEARED — THE TOWN STILL GLOWS', FIELD.width / 2, 128, 30, PALETTE.hull, 'center', '900');
+    text(`Choose 1 upgrade before ${STORMS[Math.min(6, state.stormIndex + 1)].name}  ·  click a card or press 1–3`, FIELD.width / 2, 164, 18, PALETTE.muted, 'center');
+    state.draftChoices.forEach((choice, i) => {
+      const b = getButtons(SCREEN_DRAFT, state)[i];
+      const hot = inside(b);
+      ctx.fillStyle = hot ? 'rgba(52,46,22,0.97)' : PALETTE.card;
+      ctx.fillRect(b.x, b.y, b.w, b.h);
+      ctx.strokeStyle = hot ? PALETTE.cardHover : PALETTE.cardEdge; ctx.lineWidth = hot ? 3 : 2;
+      ctx.strokeRect(b.x, b.y, b.w, b.h);
+      text(choice.icon, b.x + b.w / 2, b.y + 74, 52, PALETTE.gold, 'center');
+      text(choice.name, b.x + b.w / 2, b.y + 122, 24, PALETTE.text, 'center', '800');
+      text(`owned: ${state.upgrades[choice.id] || 0} / ${choice.max}`, b.x + b.w / 2, b.y + 150, 14, PALETTE.muted, 'center', '700');
+      // Wrap the description into the card.
+      const words = choice.desc.split(' ');
+      let line = ''; let ly = b.y + 182;
+      for (const word of words) {
+        if ((line + ' ' + word).length > 34 && line) { text(line, b.x + b.w / 2, ly, 15.5, PALETTE.muted, 'center'); ly += 22; line = word; }
+        else line = line ? line + ' ' + word : word;
+      }
+      if (line) text(line, b.x + b.w / 2, ly, 15.5, PALETTE.muted, 'center');
+      text(`[ ${i + 1} ]`, b.x + b.w / 2, b.y + b.h - 18, 15, PALETTE.gold, 'center', '800');
+    });
+  }
+
+  function endScreen(state, best, victory) {
+    ctx.fillStyle = 'rgba(5,8,18,0.6)'; ctx.fillRect(0, 0, FIELD.width, FIELD.height);
+    panel(340, 120, 600, 400);
+    text(victory ? '☀ THE SKY BREAKS ☀' : 'THE TOWN GOES DARK', FIELD.width / 2, 196, 38, victory ? PALETTE.gold : PALETTE.danger, 'center', '900');
+    if (!victory) text(state.failReason, FIELD.width / 2, 232, 16.5, PALETTE.muted, 'center');
+    const rows = [
+      ['Final score', String(state.score)],
+      ['Best score', String(Math.max(best, state.score))],
+      ['Storms cleared', `${state.stats.stormsCleared} / 7`],
+      ['Bolts harvested', String(state.harvests)],
+      ['Best harvest chain', String(state.stats.bestChain)],
+      ['Supercell hits', String(state.stats.bossHits)],
+      ['Hits taken', String(state.hitsTaken)],
+      ['Difficulty', state.difficulty.label + (state.endless ? ' · Endless' : '')],
+    ];
+    rows.forEach((row, i) => {
+      text(row[0], 420, 282 + i * 30, 17, PALETTE.muted, 'left');
+      text(row[1], 860, 282 + i * 30, 17, PALETTE.text, 'right', '800');
+    });
+    for (const b of getButtons(victory ? SCREEN_VICTORY : SCREEN_OVER, state)) button(b);
+  }
+
+  function pausedScreen() {
+    ctx.fillStyle = 'rgba(5,8,18,0.6)'; ctx.fillRect(0, 0, FIELD.width, FIELD.height);
+    panel(390, 220, 500, 310);
+    text('PAUSED', FIELD.width / 2, 300, 42, PALETTE.text, 'center', '900');
+    text('The storm waits. It is patient. You should not be.', FIELD.width / 2, 340, 15.5, PALETTE.muted, 'center');
+    for (const b of getButtons(SCREEN_PAUSED, {})) button(b);
+  }
+
+  /** Paint one frame. `best` is the stored best score; `screen` one of SCREEN_*. */
+  function draw(state, screen, best) {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#05070f'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const shakeX = state.shake ? (seeded(Math.floor(state.elapsed * 60)) - 0.5) * state.shake : 0;
+    const shakeY = state.shake ? (seeded(Math.floor(state.elapsed * 60) + 99) - 0.5) * state.shake : 0;
+    ctx.setTransform(view.scale, 0, 0, view.scale, view.x + shakeX * view.scale, view.y + shakeY * view.scale);
+    sky(state);
+    clouds(state, 0); clouds(state, 1);
+    bossDraw(state);
+    seaAndTown(state);
+    telegraphs(state);
+    hazards(state);
+    kiteDraw(state);
+    bolts(state);
+    particlesAndFloaters(state);
+    clouds(state, 2);
+    rainLayer(state);
+    if (state.flash > 0) { ctx.fillStyle = `rgba(255,246,200,${state.flash * 0.35})`; ctx.fillRect(0, 0, FIELD.width, FIELD.height); }
+    if (screen === SCREEN_TITLE) { titleScreen(state, best); return; }
+    hud(state, screen);
+    if (screen === SCREEN_DRAFT) draftScreen(state);
+    else if (screen === SCREEN_PAUSED) pausedScreen();
+    else if (screen === SCREEN_OVER) endScreen(state, best, false);
+    else if (screen === SCREEN_VICTORY) endScreen(state, best, true);
+    if (screen === SCREEN_PLAY) text('WASD/arrows or hold mouse to fly · Shift dash · P pause · M mute', FIELD.width / 2, FIELD.height - 12, 12.5, 'rgba(174,186,221,0.66)', 'center');
+  }
+
+  return { draw, setHover };
+}
