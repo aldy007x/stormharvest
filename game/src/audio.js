@@ -102,6 +102,16 @@ export function createAudio() {
     telegraphHum() { tone(180, 720, 0.5, 'sawtooth', 0.035); },
     thunder(mega) { burst(0.16, 3200, 0.5, 0, 'highpass'); burst(mega ? 1.1 : 0.7, 180, 0.65, 0.02); },
     harvest() { tone(880, 880, 0.09, 'square', 0.12); tone(1320, 1320, 0.1, 'square', 0.1, 0.06); tone(1760, 1980, 0.14, 'square', 0.09, 0.12); burst(0.2, 2400, 0.08, 0, 'bandpass'); },
+    /** Chain milestone chime: the pitch climbs with the chain, so your ears learn the multiplier. */
+    combo(chain) { const base = 660 * Math.pow(1.12, Math.min(chain, 20)); tone(base, base, 0.1, 'square', 0.1); tone(base * 1.5, base * 1.5, 0.14, 'square', 0.09, 0.05); },
+    /** Golden harvest: a brighter, richer arpeggio than a normal catch. */
+    golden() { [1318, 1760, 2217, 2637].forEach((f, i) => tone(f, f, 0.13, 'square', 0.1, i * 0.05)); burst(0.3, 3600, 0.1, 0, 'bandpass'); },
+    /** Drone catch: a soft, lower zap — same family, clearly not yours. */
+    droneZap() { tone(520, 760, 0.12, 'triangle', 0.12); tone(1040, 1040, 0.08, 'triangle', 0.07, 0.05); },
+    /** The storm peaks: a rising wind sting under a warning tone. */
+    peak() { burst(0.9, 700, 0.22, 0, 'bandpass'); tone(220, 440, 0.7, 'sawtooth', 0.07); },
+    /** The Supercell changes phase: a deep roar of wind and sub-bass. */
+    roar() { burst(1.2, 160, 0.6); tone(70, 38, 1.1, 'sawtooth', 0.32); tone(196, 98, 0.8, 'sawtooth', 0.12, 0.1); },
     hit() { burst(0.25, 300, 0.4); tone(160, 60, 0.25, 'sawtooth', 0.2); },
     dash() { burst(0.22, 900, 0.16, 0, 'bandpass'); },
     draft() { tone(523, 523, 0.12, 'triangle', 0.14); tone(784, 784, 0.16, 'triangle', 0.14, 0.09); },

@@ -34,10 +34,11 @@ function stageLightningShow(world, random) {
   }
   for (const b of e.bolts) b.life = 0.05;
   const rings = [[520, 380, 0.35], [760, 330, 0.62], [1080, 420, 0.85]];
-  for (const [x, y, frac] of rings) {
+  rings.forEach(([x, y, frac], i) => {
     const t = spawnTelegraph(e, random, 1.15, false);
     t.x = x; t.y = y; t.t = 1.15 * frac;
-  }
+    if (i === 1) t.gold = true; // one golden ring glitters over the town
+  });
   burstParticles(e, random, 330, 300, 26, '#ffe45e', 300, 0.9, 3, 60);
   for (const p of e.particles) p.life = p.total * 0.3;
 }
@@ -54,11 +55,13 @@ export function stageShot(name, world) {
     state.battery = 62; state.score = 4850; state.harvests = 41; state.hitsTaken = 3;
     state.timeLeft = 47; state.bannerT = 0; state.elapsed = 26;
     state.kite.x = 560; state.kite.y = 330; state.kite.hull = 82;
-    world.applyUpgrade('catcher'); world.applyUpgrade('battery'); world.applyUpgrade('sails');
+    world.applyUpgrade('catcher'); world.applyUpgrade('battery'); world.applyUpgrade('sails'); world.applyUpgrade('drone');
     state.draftChoices = [];
+    // A combo chain in full flow, so the HUD shows the multiplier meter.
+    state.harvestChain = 7; state.chainTimer = 3.4;
     settle(world, 0.6);
-    // A ring right under the kite (about to be harvested), two more nearby.
-    const hero = spawnTelegraph(e, random, 1.15, false); hero.x = 560; hero.y = 330; hero.t = 0.55;
+    // A golden ring right under the kite (about to be harvested), two more nearby.
+    const hero = spawnTelegraph(e, random, 1.15, false, { gold: true }); hero.x = 560; hero.y = 330; hero.t = 0.55;
     const t2 = spawnTelegraph(e, random, 1.15, false); t2.x = 830; t2.y = 250; t2.t = 0.25;
     const t3 = spawnTelegraph(e, random, 1.15, false); t3.x = 300; t3.y = 430; t3.t = 0.85;
     for (let i = 0; i < 16; i += 1) { spawnHail(e, random, 0.4); const h = e.hail.find((x) => x.active && x.y < 0); if (h) { h.y = range(random, 40, 480); h.x = range(random, 30, 1250); } }
@@ -86,6 +89,8 @@ export function stageShot(name, world) {
       const t = spawnTelegraph(e, random, 0.78, true); t.x = x; t.y = y; t.t = 0.78 * frac;
     }
     const near = spawnTelegraph(e, random, 1.0, false); near.x = 470; near.y = 360; near.t = 0.5;
+    // The eye's column lash charging at the right edge (boss is in phase 1).
+    const lash = spawnTelegraph(e, random, 1.0, true, { column: true }); lash.x = 1085; lash.y = 488; lash.t = 0.45;
     spawnTornado(e, random, 980);
     burstParticles(e, random, 700, 190, 30, '#c792ff', 340, 0.9, 4, 100);
     for (const p of e.particles) p.life = p.total * 0.3;

@@ -14,9 +14,9 @@
 import { BEST_KEY, STEP, WIN_KEY } from './config.js';
 import { createRandom } from './random.js';
 import {
-  createWorld, EVENT_BOSS_HIT, EVENT_DASH, EVENT_DRAFT, EVENT_HARVEST, EVENT_HIT,
-  EVENT_LANCE_FIRE, EVENT_LANCE_READY, EVENT_OVER, EVENT_STORM_CLEAR, EVENT_TELEGRAPH,
-  EVENT_THUNDER, EVENT_VICTORY,
+  createWorld, EVENT_BOSS_HIT, EVENT_COMBO, EVENT_DASH, EVENT_DRAFT, EVENT_DRONE, EVENT_GOLD,
+  EVENT_HARVEST, EVENT_HIT, EVENT_LANCE_FIRE, EVENT_LANCE_READY, EVENT_OVER, EVENT_PEAK,
+  EVENT_ROAR, EVENT_STORM_CLEAR, EVENT_TELEGRAPH, EVENT_THUNDER, EVENT_VICTORY,
 } from './world.js';
 import { ACTION_CONFIRM, ACTION_MUTE, ACTION_PAUSE, ACTION_RESTART, createInput } from './input.js';
 import { createAudio } from './audio.js';
@@ -78,6 +78,11 @@ function runGame() {
     if (events & EVENT_TELEGRAPH) audio.telegraphHum();
     if (events & EVENT_THUNDER) audio.thunder(false);
     if (events & EVENT_HARVEST) audio.harvest();
+    if (events & EVENT_COMBO) audio.combo(world.state.harvestChain);
+    if (events & EVENT_GOLD) audio.golden();
+    if (events & EVENT_DRONE) audio.droneZap();
+    if (events & EVENT_PEAK) audio.peak();
+    if (events & EVENT_ROAR) audio.roar();
     if (events & EVENT_HIT) audio.hit();
     if (events & EVENT_DASH) audio.dash();
     if (events & EVENT_LANCE_READY) audio.lanceReady();

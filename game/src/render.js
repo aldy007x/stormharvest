@@ -9,8 +9,9 @@
 // cards, game over and victory. Button rectangles are exported so main.js
 // hit-tests exactly what is drawn.
 
-import { BOSS, DIFFICULTIES, FIELD, FONT, PALETTE, STRIKE } from './config.js';
-import { STORMS, UPGRADES } from './world.js';
+import { BOSS, CHAIN, DIFFICULTIES, DRONE, FIELD, FONT, LASH, PALETTE, STRIKE } from './config.js';
+import { forkPoint } from './entities.js';
+import { chainMultiplier, STORMS, UPGRADES } from './world.js';
 
 export const SCREEN_TITLE = 'title';
 export const SCREEN_PLAY = 'play';
@@ -79,6 +80,9 @@ export function createRenderer(canvas) {
     grad.addColorStop(0.7, `rgb(${58 - dark * 22},${52 - dark * 14},${96 - dark * 30})`);
     grad.addColorStop(1, `rgb(${122 - dark * 40},${84 - dark * 26},${92 - dark * 22})`);
     ctx.fillStyle = grad; ctx.fillRect(0, 0, FIELD.width, FIELD.horizonY + 4);
+    // Each storm washes the sky with its own tint (amber front, violet
+    // cyclones, drowning blue…) so no two storms look alike.
+    if (state.storm.tint) { ctx.fillStyle = state.storm.tint; ctx.fillRect(0, 0, FIELD.width, FIELD.horizonY + 4); }
     // A bruised moon behind the clouds in late storms.
     ctx.fillStyle = 'rgba(230,235,255,0.5)';
     ctx.beginPath(); ctx.arc(1085, 96, 30, 0, Math.PI * 2); ctx.fill();
@@ -164,24 +168,54 @@ export function createRenderer(canvas) {
     for (const t of state.entities.telegraphs) {
       if (!t.active) continue;
       const frac = t.t / t.total;
-      const radius = (t.mega ? 118 : 92) * (1 - frac * 0.55);
       const pulse = 0.65 + Math.sin(state.elapsed * 22) * 0.35;
-      ctx.strokeStyle = t.mega ? `rgba(199,146,255,${0.55 + pulse * 0.4})` : `rgba(255,210,87,${0.5 + pulse * 0.45})`;
-      ctx.lineWidth = 3 + frac * 3;
+      // The Supercell's column lash: a vertical band of crackling purple
+      // from cloud to sea. Stand in it to harvest; the edges shock.
+      if (t.column) {
+        const w = LASH.catchHalfWidth;
+        const grad = ctx.createLinearGradient(t.x - w, 0, t.x + w, 0);
+        grad.addColorStop(0, 'rgba(199,146,255,0)');
+        grad.addColorStop(0.5, `rgba(199,146,255,${0.22 + pulse * 0.22 + frac * 0.25})`);
+        grad.addColorStop(1, 'rgba(199,146,255,0)');
+        ctx.fillStyle = grad; ctx.fillRect(t.x - w, 66, w * 2, FIELD.horizonY - 66);
+        ctx.strokeStyle = `rgba(230,200,255,${0.5 + pulse * 0.4})`; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(t.x - w, 66); ctx.lineTo(t.x - w, FIELD.horizonY); ctx.moveTo(t.x + w, 66); ctx.lineTo(t.x + w, FIELD.horizonY); ctx.stroke();
+        // The core narrows as the lash charges: a bright spine at impact.
+        ctx.fillStyle = `rgba(255,255,255,${frac * 0.5})`;
+        ctx.fillRect(t.x - 2 - frac * 3, 66, 4 + frac * 6, FIELD.horizonY - 66);
+        text('⚡ LASH ⚡', t.x, 150, 15, '#e6c8ff', 'center', '800');
+        continue;
+      }
+      const radius = (t.mega ? 118 : 92) * (1 - frac * 0.55);
+      const ringColor = t.gold ? `rgba(255,243,176,${0.6 + pulse * 0.4})` : (t.mega ? `rgba(199,146,255,${0.55 + pulse * 0.4})` : `rgba(255,210,87,${0.5 + pulse * 0.45})`);
+      ctx.strokeStyle = ringColor;
+      ctx.lineWidth = 3 + frac * 3 + (t.gold ? 1.5 : 0);
       ctx.beginPath(); ctx.arc(t.x, t.y, radius, 0, Math.PI * 2); ctx.stroke();
       ctx.strokeStyle = 'rgba(255,255,255,0.5)'; ctx.lineWidth = 1.5;
       ctx.beginPath(); ctx.arc(t.x, t.y, Math.max(8, radius * (1 - frac)), 0, Math.PI * 2); ctx.stroke();
-      ctx.fillStyle = t.mega ? '#c792ff' : PALETTE.telegraph;
+      ctx.fillStyle = t.gold ? '#fff3b0' : (t.mega ? '#c792ff' : PALETTE.telegraph);
       ctx.beginPath(); ctx.arc(t.x, t.y, 4 + frac * 4, 0, Math.PI * 2); ctx.fill();
-      text(t.mega ? 'MEGA' : '', t.x, t.y - radius - 8, 13, '#c792ff', 'center', '800');
+      text(t.gold ? 'GOLD ×3' : (t.mega ? 'MEGA' : ''), t.x, t.y - radius - 8, 13, t.gold ? '#fff3b0' : '#c792ff', 'center', '800');
       // Cross ticks so the ring reads even in peripheral vision.
-      ctx.strokeStyle = 'rgba(255,230,150,0.8)';
+      ctx.strokeStyle = t.gold ? 'rgba(255,243,176,0.9)' : 'rgba(255,230,150,0.8)';
       for (let k = 0; k < 4; k += 1) {
         const a = k * Math.PI / 2 + Math.PI / 4;
         ctx.beginPath();
         ctx.moveTo(t.x + Math.cos(a) * (radius + 6), t.y + Math.sin(a) * (radius + 6));
         ctx.lineTo(t.x + Math.cos(a) * (radius + 18), t.y + Math.sin(a) * (radius + 18));
         ctx.stroke();
+      }
+      // A forked strike shows its twin ring, linked by a crackling tie —
+      // catching EITHER ring harvests, so the pair reads as one decision.
+      if (t.fork) {
+        const fp = forkPoint(t);
+        ctx.strokeStyle = ringColor; ctx.lineWidth = 2.5;
+        ctx.beginPath(); ctx.arc(fp.x, fp.y, radius * 0.92, 0, Math.PI * 2); ctx.stroke();
+        ctx.strokeStyle = 'rgba(255,255,255,0.45)'; ctx.lineWidth = 1.5;
+        ctx.setLineDash([5, 6]);
+        ctx.beginPath(); ctx.moveTo(t.x, t.y); ctx.lineTo(fp.x, fp.y); ctx.stroke();
+        ctx.setLineDash([]);
+        text('FORK', fp.x, fp.y - radius * 0.92 - 8, 12, PALETTE.telegraph, 'center', '800');
       }
     }
     // Catcher radius around the kite, so players can judge a harvest.
@@ -374,6 +408,47 @@ export function createRenderer(canvas) {
     }
   }
 
+  /** Harvest drones: little rotor craft holding their orbit around the kite,
+   *  each with its own faint catcher ring so their coverage reads at a glance. */
+  function dronesDraw(state) {
+    for (const d of state.dronePos) {
+      ctx.strokeStyle = 'rgba(143,208,255,0.30)'; ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 7]);
+      ctx.beginPath(); ctx.arc(d.x, d.y, DRONE.radius, 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.save(); ctx.translate(d.x, d.y);
+      // Rotor blur arcs spinning with the orbit phase.
+      ctx.strokeStyle = 'rgba(200,230,255,0.75)'; ctx.lineWidth = 2;
+      const spin = state.elapsed * 26 + d.angle * 3;
+      for (const sx of [-13, 13]) {
+        ctx.beginPath(); ctx.arc(sx, -7, 7, spin, spin + 2.4); ctx.stroke();
+        ctx.beginPath(); ctx.arc(sx, -7, 7, spin + Math.PI, spin + Math.PI + 2.4); ctx.stroke();
+      }
+      // Body: a compact cyan diamond with a charged core.
+      ctx.fillStyle = '#57d7ff';
+      ctx.beginPath(); ctx.moveTo(0, -10); ctx.lineTo(11, 0); ctx.lineTo(0, 10); ctx.lineTo(-11, 0); ctx.closePath(); ctx.fill();
+      ctx.fillStyle = '#eaf7ff';
+      ctx.beginPath(); ctx.arc(0, 0, 3.5, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+      // Tether line back to the kite, so the orbit reads as one machine.
+      ctx.strokeStyle = 'rgba(143,208,255,0.22)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(state.kite.x, state.kite.y); ctx.lineTo(d.x, d.y); ctx.stroke();
+    }
+  }
+
+  /** Expanding shockwave rings from harvests, lance hits and storm clears. */
+  function ringsDraw(state) {
+    for (const r of state.entities.rings) {
+      if (!r.active) continue;
+      const frac = r.life / r.total;
+      const ease = 1 - (1 - frac) * (1 - frac);
+      ctx.globalAlpha = (1 - frac) * 0.85;
+      ctx.strokeStyle = r.color; ctx.lineWidth = r.width * (1 - frac * 0.6);
+      ctx.beginPath(); ctx.arc(r.x, r.y, Math.max(2, r.maxR * ease), 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
   function particlesAndFloaters(state) {
     for (const p of state.entities.particles) {
       if (!p.active) continue;
@@ -406,7 +481,9 @@ export function createRenderer(canvas) {
       // objective (y25) · INTEGRITY label+bar (y55–67) · LANCE label+bar
       // (y74–86). Nothing overlaps the storm title, the timer, or the boss
       // itself (the Supercell is drawn below the strip, eye at boss.y+16).
-      text('⚡ HARVEST MEGA-BOLTS → CHARGE THE LANCE → SPACE TO FIRE ⚡', FIELD.width / 2, 25, 16, '#c792ff', 'center', '800');
+      text(state.boss.hp === 2 ? '👁 THE EYE IS OPEN — DODGE ITS LASH, FEED ON ITS BOLTS 👁'
+        : state.boss.hp === 1 ? '🔥 THE SUPERCELL RAGES — ONE HIT LEFT 🔥'
+          : '⚡ HARVEST MEGA-BOLTS → CHARGE THE LANCE → SPACE TO FIRE ⚡', FIELD.width / 2, 25, 16, state.boss.hp < 3 ? '#ff9d5c' : '#c792ff', 'center', '800');
       text(`INTEGRITY ${state.boss.hp}/${state.boss.maxHp}`, 462, 66, 13, '#ffb0b0', 'right', '800');
       bar(470, 55, 340, 12, state.boss.maxHp ? state.boss.hp / state.boss.maxHp : 0, '#ff5d5d');
       text(state.lance >= STRIKE.lanceMax ? 'LANCE READY — SPACE!' : `LANCE ${Math.floor(state.lance)}%`, 462, 85, 13, '#c792ff', 'right', '800');
@@ -414,6 +491,15 @@ export function createRenderer(canvas) {
     } else {
       text(`BATTERY ${state.battery} / ${state.quota}`, FIELD.width / 2, 26, 18, PALETTE.text, 'center', '800');
       bar(FIELD.width / 2 - 170, 34, 340, 14, state.quota ? state.battery / state.quota : 0, PALETTE.battery);
+    }
+    // Combo chain meter, under the centrepiece: the multiplier you are
+    // flying for, and the shrinking bar of time left to feed it.
+    if (state.harvestChain >= 2 && screen === SCREEN_PLAY) {
+      const mult = chainMultiplier(state.harvestChain);
+      const hot = state.harvestChain >= 10;
+      text(`⚡ CHAIN ${state.harvestChain} · ×${mult.toFixed(1)} SCORE`, FIELD.width / 2, state.storm.boss ? 108 : 66, 15, hot ? PALETTE.gold : PALETTE.charge, 'center', '800');
+      const window = state.upgrades.lattice ? CHAIN.latticeWindow : CHAIN.window;
+      bar(FIELD.width / 2 - 90, state.storm.boss ? 112 : 70, 180, 5, state.chainTimer / window, hot ? PALETTE.gold : PALETTE.charge, 'rgba(255,255,255,0.12)');
     }
     // Timer (right-top), hull, score, dash.
     const urgent = state.timeLeft <= 15 && screen === SCREEN_PLAY;
@@ -446,8 +532,9 @@ export function createRenderer(canvas) {
       ctx.globalAlpha = a;
       ctx.fillStyle = 'rgba(8,12,26,0.66)'; ctx.fillRect(290, 120, 700, 92);
       ctx.strokeStyle = PALETTE.panelEdge; ctx.strokeRect(290, 120, 700, 92);
-      text(`STORM ${state.stormIndex + 1} OF 7`, FIELD.width / 2, 158, 17, PALETTE.gold, 'center', '800');
-      text(state.storm.name, FIELD.width / 2, 196, 34, PALETTE.text, 'center', '900');
+      text(`STORM ${state.stormIndex + 1} OF 7`, FIELD.width / 2, 152, 17, PALETTE.gold, 'center', '800');
+      text(state.storm.name, FIELD.width / 2, 188, 34, PALETTE.text, 'center', '900');
+      if (state.storm.tag) text(state.storm.tag, FIELD.width / 2, 206, 14.5, PALETTE.muted, 'center', '600');
       ctx.globalAlpha = 1;
     }
   }
@@ -474,13 +561,15 @@ export function createRenderer(canvas) {
     const lines = [
       'Lightning is telegraphed: a glowing ring counts down, then the bolt lands.',
       'Be INSIDE the ring at the strike to harvest charge into the town batteries.',
+      'Chain harvests without a miss to grow a COMBO multiplier — up to ×2.6 score.',
+      'Golden rings pay triple but fall fast. Forked strikes land as twins.',
       'Fill the quota before the storm timer ends — through all SEVEN storms.',
-      'Dodge hail, gusts and tornadoes. Between storms, draft 1 of 3 upgrades.',
-      'Storm 7: THE SUPERCELL. Harvest its mega-bolts, charge the Storm Lance,',
-      'press SPACE at full charge — three hits bring it down.',
+      'Dodge hail, gusts and tornadoes. Between storms, draft 1 of 3 upgrades',
+      '— even a Harvest Drone that catches rings for you. Storm 7: THE SUPERCELL.',
+      'Harvest its mega-bolts, charge the Storm Lance, SPACE to fire. 3 hits win.',
       'Fly: WASD / arrows or hold mouse · Dash: Shift · Pause: P · Mute: M',
     ];
-    lines.forEach((line, i) => text(line, FIELD.width / 2, 312 + i * 24, 16.5, PALETTE.muted, 'center'));
+    lines.forEach((line, i) => text(line, FIELD.width / 2, 306 + i * 19.5, 15, PALETTE.muted, 'center'));
     text(best > 0 ? `Best score: ${best}` : 'Choose your sky:', FIELD.width / 2, 498, 16, PALETTE.muted, 'center', '700');
     for (const b of getButtons(SCREEN_TITLE, state)) button(b, b.id.startsWith('diff') ? PALETTE.battery : PALETTE.lance);
     text('Calm = gentler · Tempest = the real storm · Maelstrom = for maniacs', FIELD.width / 2, 652, 14, PALETTE.dim, 'center');
@@ -513,24 +602,37 @@ export function createRenderer(canvas) {
     });
   }
 
+  /** A letter grade for the run, from score and whether the sky broke. */
+  function runGrade(state, victory) {
+    if (victory && state.score >= 24000) return 'S — LEGEND OF THE SKY';
+    if (victory) return 'A — STORM TAMER';
+    if (state.score >= 16000) return 'B — SKY RIDER';
+    if (state.score >= 9000) return 'C — KITE HAND';
+    if (state.score >= 3500) return 'D — GROUNDED DREAMER';
+    return 'E — FIRST FLIGHT';
+  }
+
   function endScreen(state, best, victory) {
     ctx.fillStyle = 'rgba(5,8,18,0.6)'; ctx.fillRect(0, 0, FIELD.width, FIELD.height);
     panel(340, 120, 600, 400);
-    text(victory ? '☀ THE SKY BREAKS ☀' : 'THE TOWN GOES DARK', FIELD.width / 2, 196, 38, victory ? PALETTE.gold : PALETTE.danger, 'center', '900');
-    if (!victory) text(state.failReason, FIELD.width / 2, 232, 16.5, PALETTE.muted, 'center');
+    text(victory ? '☀ THE SKY BREAKS ☀' : 'THE TOWN GOES DARK', FIELD.width / 2, 192, 38, victory ? PALETTE.gold : PALETTE.danger, 'center', '900');
+    if (!victory) text(state.failReason, FIELD.width / 2, 224, 16, PALETTE.muted, 'center');
+    text(`RUN GRADE  ${runGrade(state, victory)}`, FIELD.width / 2, victory ? 226 : 250, 17, PALETTE.gold, 'center', '800');
     const rows = [
       ['Final score', String(state.score)],
       ['Best score', String(Math.max(best, state.score))],
       ['Storms cleared', `${state.stats.stormsCleared} / 7`],
       ['Bolts harvested', String(state.harvests)],
-      ['Best harvest chain', String(state.stats.bestChain)],
+      ['Best harvest chain', `×${state.stats.bestChain}`],
+      ['Golden strikes caught', String(state.stats.goldCaught)],
+      ['Drone catches', String(state.stats.droneCatches)],
       ['Supercell hits', String(state.stats.bossHits)],
       ['Hits taken', String(state.hitsTaken)],
       ['Difficulty', state.difficulty.label + (state.endless ? ' · Endless' : '')],
     ];
     rows.forEach((row, i) => {
-      text(row[0], 420, 282 + i * 30, 17, PALETTE.muted, 'left');
-      text(row[1], 860, 282 + i * 30, 17, PALETTE.text, 'right', '800');
+      text(row[0], 420, 282 + i * 24, 16, PALETTE.muted, 'left');
+      text(row[1], 860, 282 + i * 24, 16, PALETTE.text, 'right', '800');
     });
     for (const b of getButtons(victory ? SCREEN_VICTORY : SCREEN_OVER, state)) button(b);
   }
@@ -556,12 +658,21 @@ export function createRenderer(canvas) {
     seaAndTown(state);
     telegraphs(state);
     hazards(state);
+    dronesDraw(state);
     kiteDraw(state);
     bolts(state);
+    ringsDraw(state);
     particlesAndFloaters(state);
     clouds(state, 2);
     rainLayer(state);
     if (state.flash > 0) { ctx.fillStyle = `rgba(255,246,200,${state.flash * 0.35})`; ctx.fillRect(0, 0, FIELD.width, FIELD.height); }
+    // Low hull: a pulsing red vignette so danger is felt, not just read.
+    if (screen === SCREEN_PLAY && state.kite.maxHull && state.kite.hull / state.kite.maxHull < 0.3 && !state.over) {
+      const pulse = 0.16 + Math.sin(state.elapsed * 6) * 0.08;
+      const vg = ctx.createRadialGradient(FIELD.width / 2, FIELD.height / 2, 300, FIELD.width / 2, FIELD.height / 2, 760);
+      vg.addColorStop(0, 'rgba(255,40,40,0)'); vg.addColorStop(1, `rgba(255,40,40,${pulse})`);
+      ctx.fillStyle = vg; ctx.fillRect(0, 0, FIELD.width, FIELD.height);
+    }
     if (screen === SCREEN_TITLE) { titleScreen(state, best); return; }
     hud(state, screen);
     if (screen === SCREEN_DRAFT) draftScreen(state);

@@ -33,6 +33,31 @@ export const STRIKE = {
   missScore: 0,
 };
 
+/** Combo chains: consecutive harvests without a miss or a hit build a
+ *  multiplier. The chain survives `window` seconds after each harvest;
+ *  a miss, a sting or any hull damage resets it to zero. */
+export const CHAIN = {
+  window: 4.5,        // seconds a chain stays alive after a harvest
+  latticeWindow: 7.5, // window with the Chain Lattice upgrade
+  perStep: 0.08,      // score multiplier gained per chain step (+8%)
+  cap: 20,            // chain steps that count toward the multiplier
+};
+
+/** Golden strikes: rare, faster telegraphs that pay double charge and
+ *  triple score — worth breaking your route for. */
+export const GOLD = { chance: 0.12, telegraph: 0.92, chargeMul: 2, scoreMul: 3 };
+
+/** Harvest drones (draft upgrade): orbit the kite and catch any strike that
+ *  lands inside their own small catcher, banking half charge and score.
+ *  The orbit (118) deliberately sits OUTSIDE the kite's base catcher (86):
+ *  drones extend your coverage to rings you cannot reach, not duplicate it. */
+export const DRONE = { radius: 54, orbit: 118, orbitSpeed: 1.15, chargeFrac: 0.5 };
+
+/** The Supercell's column lash (boss phase 1+): a telegraphed vertical
+ *  lightning column at the kite's position. Stand in it to harvest it as a
+ *  mega-bolt; stand near it and the shockwave bites. */
+export const LASH = { every: 7.5, telegraph: 1.0, catchHalfWidth: 58, shockHalfWidth: 104, shockDamage: 10 };
+
 export const HAIL = { damage: 8, radius: 9, speedMin: 260, speedMax: 430 };
 export const GUST = { force: 420, life: 3.2 };
 export const TORNADO = { damage: 14, radius: 30, speed: 62, pull: 150 };
@@ -43,7 +68,9 @@ export const BOSS = {
   y: 118,
   radius: 118,
   drift: 46,             // horizontal drift speed of the living cloud
-  barrageEvery: 5.2,     // seconds between mega-bolt barrages
+  barrageEvery: 5.2,     // seconds between mega-bolt barrages (phase 0)
+  barragePhase1: 4.3,    // phase 1 (2 hp left): the eye opens, barrages quicken
+  barragePhase2: 3.5,    // phase 2 (1 hp left): enraged
   tornadoEvery: 9.0,
 };
 
@@ -84,4 +111,4 @@ export const BEST_KEY = 'stormharvest.best';
 export const WIN_KEY = 'stormharvest.won';
 
 /** Pool sizes, allocated once at boot so play never allocates in the hot loop. */
-export const POOLS = { telegraphs: 24, bolts: 24, hail: 90, gusts: 10, tornadoes: 6, particles: 420, floaters: 24, rain: 170, clouds: 26 };
+export const POOLS = { telegraphs: 28, bolts: 28, hail: 90, gusts: 10, tornadoes: 6, particles: 420, floaters: 24, rain: 170, clouds: 26, rings: 24 };

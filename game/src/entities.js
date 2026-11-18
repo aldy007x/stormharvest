@@ -8,6 +8,7 @@
 //   gusts      — horizontal wind bands that shove the kite
 //   tornadoes  — roaming funnels (late storms + the Supercell) that damage + pull
 //   particles  — sparks, rain splashes, harvest bursts, boss debris
+//   rings      — expanding shockwave circles (harvest pops, lance hits)
 //   floaters   — rising score / event text ("+100", "HULL -8")
 //   rain       — background rain streaks, recycled forever
 //   clouds     — parallax storm-cloud blobs (positions seeded once)
@@ -28,35 +29,57 @@ export function freeOf(pool) {
 }
 
 export function createEntities(random) {
-  const telegraphs = makePool(POOLS.telegraphs, () => ({ active: false, x: 0, y: 0, t: 0, total: 1, mega: false }));
+  const telegraphs = makePool(POOLS.telegraphs, () => ({ active: false, x: 0, y: 0, t: 0, total: 1, mega: false, gold: false, fork: false, column: false }));
   const bolts = makePool(POOLS.bolts, () => ({ active: false, x: 0, y: 0, life: 0, total: 0.28, mega: false, seed: 0, caught: false }));
   const hail = makePool(POOLS.hail, () => ({ active: false, x: 0, y: 0, vx: 0, vy: 0, r: 9, spin: 0 }));
   const gusts = makePool(POOLS.gusts, () => ({ active: false, x: 0, y: 0, w: 0, dir: 1, life: 0, total: 3 }));
   const tornadoes = makePool(POOLS.tornadoes, () => ({ active: false, x: 0, y: 0, vx: 0, phase: 0 }));
   const particles = makePool(POOLS.particles, () => ({ active: false, x: 0, y: 0, vx: 0, vy: 0, life: 0, total: 1, size: 2, color: '#ffffff', gravity: 0 }));
   const floaters = makePool(POOLS.floaters, () => ({ active: false, x: 0, y: 0, life: 0, total: 1, text: '', color: '#ffffff', size: 20 }));
+  const rings = makePool(POOLS.rings, () => ({ active: false, x: 0, y: 0, life: 0, total: 0.5, maxR: 90, color: '#ffe45e', width: 3 }));
   const rain = makePool(POOLS.rain, () => ({ x: random() * FIELD.width, y: random() * FIELD.height, len: range(random, 12, 30), speed: range(random, 620, 980) }));
   const clouds = makePool(POOLS.clouds, () => ({
     x: random() * FIELD.width, y: range(random, -30, 210),
     w: range(random, 220, 520), layer: Math.floor(random() * 3), shade: random(),
   }));
-  return { telegraphs, bolts, hail, gusts, tornadoes, particles, floaters, rain, clouds };
+  return { telegraphs, bolts, hail, gusts, tornadoes, particles, floaters, rain, clouds, rings };
 }
 
 export function clearEntities(e) {
-  for (const list of [e.telegraphs, e.bolts, e.hail, e.gusts, e.tornadoes, e.particles, e.floaters]) {
+  for (const list of [e.telegraphs, e.bolts, e.hail, e.gusts, e.tornadoes, e.particles, e.floaters, e.rings]) {
     for (const item of list) item.active = false;
   }
 }
 
-/** Spawn a telegraphed strike. `total` is the warning time before it lands. */
-export function spawnTelegraph(e, random, total, mega) {
+/**
+ * Spawn a telegraphed strike. `total` is the warning time before it lands.
+ * `kind` may set: gold (rare triple-pay strike), fork (a second bolt lands
+ * beside the first; catching either harvests), column (the Supercell's
+ * vertical lash — x is the column centre, y is unused).
+ */
+export function spawnTelegraph(e, random, total, mega, kind = {}) {
   const t = freeOf(e.telegraphs); if (!t) return null;
   t.active = true; t.mega = !!mega;
+  t.gold = !!kind.gold; t.fork = !!kind.fork; t.column = !!kind.column;
   t.x = range(random, 70, FIELD.width - 70);
   t.y = range(random, 120, FIELD.horizonY - 40);
   t.t = 0; t.total = total;
   return t;
+}
+
+/** The second landing point of a forked strike, beside the telegraph's own. */
+export function forkPoint(t) {
+  const dir = t.x < FIELD.width / 2 ? 1 : -1;
+  return {
+    x: Math.min(FIELD.width - 60, Math.max(60, t.x + dir * 118)),
+    y: Math.min(FIELD.horizonY - 30, Math.max(110, t.y + 36)),
+  };
+}
+
+/** Spawn an expanding shockwave ring (pure juice: harvests, hits, clears). */
+export function spawnRing(e, x, y, maxR, color, width = 3, total = 0.5) {
+  const r = freeOf(e.rings); if (!r) return;
+  r.active = true; r.x = x; r.y = y; r.life = 0; r.total = total; r.maxR = maxR; r.color = color; r.width = width;
 }
 
 /** Turn a telegraph into a landed bolt (called by the world at strike moment). */
@@ -139,6 +162,10 @@ export function stepEntities(e, dt, wind, time) {
   for (const f of e.floaters) {
     if (!f.active) continue;
     f.life += dt; f.y -= 34 * dt; if (f.life >= f.total) f.active = false;
+  }
+  for (const r of e.rings) {
+    if (!r.active) continue;
+    r.life += dt; if (r.life >= r.total) r.active = false;
   }
   for (const r of e.rain) {
     r.y += r.speed * dt; r.x += wind * 130 * dt;

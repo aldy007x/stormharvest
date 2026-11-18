@@ -2,27 +2,41 @@
 // The game's rules and state, with no drawing and no browser in it.
 // Systems, in the order step() runs them:
 //   1. Storm director — the seven named storms (data below): each has a
-//      battery quota, a timer, strike cadence, hazard mix and sky darkness.
-//      Storm 4 is a mini-boss (THE HOWLING FRONT: fast telegraphs + gusts),
-//      storm 7 is the boss (THE SUPERCELL, see system 6).
+//      battery quota, a timer, strike cadence, hazard mix, sky darkness,
+//      its own sky tint and tagline. Storm 4 is a mini-boss (THE HOWLING
+//      FRONT: fast telegraphs + gusts), storm 7 is the boss (system 7).
+//      Every storm PEAKS in its final third: cadence quickens, telegraphs
+//      shorten — the last seconds are always the wildest.
 //   2. Flight — velocity flight with dash (burst + cooldown + i-frames),
 //      mouse-steer while the pointer is held, wind gusts and tornado pull.
 //   3. Lightning — strikes telegraph (ring + hum), then land: being inside
 //      the catcher radius at that instant harvests charge into the town
 //      batteries; being at ground zero without catching still stings.
-//   4. Hazards — hail shards, gusts, tornadoes chip the hull; hull 0 = wreck.
-//   5. Draft — clearing a storm's quota opens a draft of 3 upgrades drawn
-//      from a pool of 14; the run builds a different harvester each time.
-//   6. Boss — THE SUPERCELL has 3 health. Its mega-bolts charge the Storm
-//      Lance when harvested; a full Lance fires (Space / click the Lance)
-//      for one hit. Three hits win the game.
-//   7. Scoring — harvests, storm clears, boss hits, time bonuses, all scaled
-//      by difficulty; Endless mode keeps escalating after a victory.
+//      Varieties: GOLDEN strikes (rare, fast, double charge / triple
+//      score) and FORKED strikes (two bolts land side by side; catching
+//      either one harvests).
+//   4. Combos — consecutive harvests build a chain multiplier (up to
+//      x2.6 score) that decays after a few idle seconds; a miss or a hit
+//      breaks it. Routing for chains is the game's central risk decision.
+//   5. Drones — the Harvest Drone upgrade orbits one or two drones around
+//      the kite; a strike landing in a drone's catcher is banked at half
+//      value, so positioning the orbit matters as much as the kite.
+//   6. Hazards — hail shards, gusts, tornadoes chip the hull; hull 0 = wreck.
+//   7. Draft — clearing a storm's quota opens a draft of 3 upgrades drawn
+//      from a pool of 17; the run builds a different harvester each time.
+//   8. Boss — THE SUPERCELL has 3 health and three phases. Its mega-bolts
+//      charge the Storm Lance when harvested; a full Lance fires (Space /
+//      click the Lance) for one hit. Losing health opens the eye (spiral
+//      mega barrage + column lashes at your position), then enrages it
+//      (faster barrages, twin tornadoes). Three hits win the game.
+//   9. Scoring — harvests (chain- and surge-scaled), storm clears, boss
+//      hits, time bonuses, all scaled by difficulty; Endless mode keeps
+//      escalating after a victory.
 // step() returns EVENT_* bit flags so main.js can react (sound, screens)
 // without the world knowing about either.
 
-import { BOSS, DIFFICULTIES, FIELD, GUST, HAIL, KITE, STRIKE, TORNADO } from './config.js';
-import { addFloater, burstParticles, clearEntities, createEntities, landBolt, spawnGust, spawnHail, spawnTelegraph, spawnTornado, stepEntities } from './entities.js';
+import { BOSS, CHAIN, DIFFICULTIES, DRONE, FIELD, GOLD, GUST, HAIL, KITE, LASH, STRIKE, TORNADO } from './config.js';
+import { addFloater, burstParticles, clearEntities, createEntities, forkPoint, landBolt, spawnGust, spawnHail, spawnRing, spawnTelegraph, spawnTornado, stepEntities } from './entities.js';
 import { pick, range } from './random.js';
 
 export const EVENT_HARVEST = 1;
@@ -37,19 +51,31 @@ export const EVENT_LANCE_FIRE = 256;
 export const EVENT_BOSS_HIT = 512;
 export const EVENT_DASH = 1024;
 export const EVENT_TELEGRAPH = 2048;
+export const EVENT_COMBO = 4096;      // chain reached a milestone (5/10/15/20)
+export const EVENT_GOLD = 8192;       // a golden strike was harvested
+export const EVENT_DRONE = 16384;     // a drone banked a strike
+export const EVENT_PEAK = 32768;      // the storm entered its peak phase
+export const EVENT_ROAR = 65536;      // the Supercell changed phase / raged
 
-/** The seven storms. quota = battery charge to fill; time = seconds on the clock. */
+/** The seven storms. quota = battery charge to fill; time = seconds on the
+ *  clock; tint = an rgba sky wash that gives each storm its own colour;
+ *  fork = chance a strike lands as a forked pair. */
 export const STORMS = [
-  { name: 'FIRST RUMBLES', quota: 60, time: 75, strikeEvery: 1.9, hail: 0.0, gustEvery: 9, tornadoes: 0, dark: 0.25, wind: 0.2 },
-  { name: 'SQUALL LINE', quota: 84, time: 85, strikeEvery: 1.7, hail: 0.5, gustEvery: 8, tornadoes: 0, dark: 0.38, wind: 0.45 },
-  { name: 'HAILVEIN', quota: 108, time: 90, strikeEvery: 1.55, hail: 1.4, gustEvery: 7, tornadoes: 0, dark: 0.5, wind: 0.55 },
-  { name: 'THE HOWLING FRONT', quota: 120, time: 95, strikeEvery: 1.15, hail: 0.9, gustEvery: 3.6, tornadoes: 0, dark: 0.62, wind: 0.95, miniboss: true },
-  { name: 'TWIN CYCLONES', quota: 132, time: 100, strikeEvery: 1.45, hail: 1.1, gustEvery: 6, tornadoes: 2, dark: 0.72, wind: 0.7 },
-  { name: 'THE DROWNING SKY', quota: 156, time: 105, strikeEvery: 1.3, hail: 1.9, gustEvery: 5, tornadoes: 1, dark: 0.84, wind: 0.8 },
-  { name: 'THE SUPERCELL', quota: 0, time: 150, strikeEvery: 1.5, hail: 0.85, gustEvery: 6.5, tornadoes: 0, dark: 1.0, wind: 0.65, boss: true },
+  { name: 'FIRST RUMBLES', tag: 'Learn the rings. Trust the hum.', quota: 60, time: 75, strikeEvery: 1.9, hail: 0.0, gustEvery: 9, tornadoes: 0, dark: 0.25, wind: 0.2, fork: 0, tint: 'rgba(70,90,160,0.10)' },
+  { name: 'SQUALL LINE', tag: 'The wind picks a side. So must you.', quota: 84, time: 85, strikeEvery: 1.7, hail: 0.5, gustEvery: 8, tornadoes: 0, dark: 0.38, wind: 0.45, fork: 0, tint: 'rgba(30,140,150,0.12)' },
+  { name: 'HAILVEIN', tag: 'Ice falls. Gold falls faster.', quota: 108, time: 90, strikeEvery: 1.55, hail: 1.4, gustEvery: 7, tornadoes: 0, dark: 0.5, wind: 0.55, fork: 0.08, tint: 'rgba(150,200,255,0.10)' },
+  { name: 'THE HOWLING FRONT', tag: 'MINI-BOSS — fast bolts, hard wind.', quota: 120, time: 95, strikeEvery: 1.15, hail: 0.9, gustEvery: 3.6, tornadoes: 0, dark: 0.62, wind: 0.95, fork: 0.1, tint: 'rgba(255,140,50,0.12)', miniboss: true },
+  { name: 'TWIN CYCLONES', tag: 'Two funnels. Forked lightning.', quota: 132, time: 100, strikeEvery: 1.45, hail: 1.1, gustEvery: 6, tornadoes: 2, dark: 0.72, wind: 0.7, fork: 0.22, tint: 'rgba(140,90,220,0.13)' },
+  { name: 'THE DROWNING SKY', tag: 'The sky itself is falling in.', quota: 156, time: 105, strikeEvery: 1.3, hail: 1.9, gustEvery: 5, tornadoes: 1, dark: 0.84, wind: 0.8, fork: 0.3, tint: 'rgba(20,90,140,0.16)' },
+  { name: 'THE SUPERCELL', tag: 'Charge the Lance. Three hits. Bring it down.', quota: 0, time: 150, strikeEvery: 1.5, hail: 0.85, gustEvery: 6.5, tornadoes: 0, dark: 1.0, wind: 0.65, fork: 0.15, tint: 'rgba(120,40,200,0.15)', boss: true },
 ];
 
-/** The upgrade pool (14). Draft offers 3 distinct, not-yet-maxed choices. */
+/** Score multiplier from the current harvest chain (x1.0 at 0, x2.6 at cap). */
+export function chainMultiplier(chain) {
+  return 1 + Math.min(chain, CHAIN.cap) * CHAIN.perStep;
+}
+
+/** The upgrade pool (17). Draft offers 3 distinct, not-yet-maxed choices. */
 export const UPGRADES = [
   { id: 'catcher', name: 'Wide Catcher', icon: '◉', max: 3, desc: '+22 harvest radius per rank. Forgiving rings, greedier routes.' },
   { id: 'hull', name: 'Reinforced Hull', icon: '⬢', max: 3, desc: '+25 max hull and repair 25 now.' },
@@ -65,6 +91,9 @@ export const UPGRADES = [
   { id: 'surge', name: 'Surge Scoring', icon: '★', max: 2, desc: 'Harvests score +50% per rank.' },
   { id: 'ballast', name: 'Wind Ballast', icon: '⚓', max: 2, desc: 'Gusts and tornado pull push you 55% less.' },
   { id: 'second', name: 'Second Kite', icon: '♡', max: 1, desc: 'Once per run: a fatal hit instead leaves you at 30 hull.' },
+  { id: 'drone', name: 'Harvest Drone', icon: '✛', max: 2, desc: 'A drone orbits your kite and banks strikes landing in its catcher at half value.' },
+  { id: 'lattice', name: 'Chain Lattice', icon: '⌘', max: 1, desc: 'Your combo chain survives far longer between harvests (4.5s → 7.5s).' },
+  { id: 'cells', name: 'Storm Cells', icon: '✜', max: 2, desc: 'Golden harvests also repair 4 hull and pay +2 bonus charge.' },
 ];
 
 const dist2 = (ax, ay, bx, by) => { const dx = ax - bx; const dy = ay - by; return dx * dx + dy * dy; };
@@ -75,16 +104,17 @@ export function createWorld(random) {
     x: FIELD.width / 2, y: 330, vx: 0, vy: 0, hull: KITE.hull, maxHull: KITE.hull,
     catcher: KITE.catcher, invulnerable: 0, dashT: 0, dashCd: 0, dashDirX: 1, dashDirY: 0, facing: 1,
   };
-  const boss = { active: false, x: FIELD.width / 2, y: BOSS.y, hp: BOSS.hp, maxHp: BOSS.hp, phase: 0, barrageT: 3, tornadoT: 5, flash: 0 };
+  const boss = { active: false, x: FIELD.width / 2, y: BOSS.y, hp: BOSS.hp, maxHp: BOSS.hp, phase: 0, barrageT: 3, tornadoT: 5, lashT: 7, flash: 0 };
   const state = {
     entities, kite, boss,
     screenTime: 0, elapsed: 0, stormIndex: 0, storm: STORMS[0], stormTime: 0, timeLeft: STORMS[0].time,
     battery: 0, quota: STORMS[0].quota, score: 0, harvests: 0, strikesSeen: 0, hitsTaken: 0,
     difficulty: DIFFICULTIES.tempest, endless: false, endlessCycle: 0,
-    upgrades: {}, draftChoices: [], harvestChain: 0,
+    upgrades: {}, draftChoices: [], harvestChain: 0, chainTimer: 0,
+    dronePos: [], peakAnnounced: false, endAt: -1,
     strikeT: 1.2, hailT: 1, gustT: 4, lance: 0, lanceReadyAnnounced: false,
     shake: 0, flash: 0, bannerT: 3, windPhase: 0, wind: 0, secondUsed: false,
-    stats: { stormsCleared: 0, bossHits: 0, bestChain: 0 },
+    stats: { stormsCleared: 0, bossHits: 0, bestChain: 0, goldCaught: 0, droneCatches: 0 },
     over: false, victory: false, failReason: '',
   };
 
@@ -106,8 +136,9 @@ export function createWorld(random) {
     state.quota = currentQuota();
     state.bannerT = 3;
     state.strikeT = 1.1; state.hailT = 1.4; state.gustT = 3;
+    state.peakAnnounced = false;
     boss.active = !!state.storm.boss;
-    if (boss.active) { boss.hp = BOSS.hp; boss.phase = 0; boss.barrageT = 2.5; boss.tornadoT = 4; state.lance = 0; }
+    if (boss.active) { boss.hp = BOSS.hp; boss.phase = 0; boss.barrageT = 2.5; boss.tornadoT = 4; boss.lashT = 6; state.lance = 0; }
     for (let i = 0; i < state.storm.tornadoes; i += 1) spawnTornado(entities, random);
     if (state.storm.miniboss) addFloater(entities, FIELD.width / 2, 210, 'MINI-BOSS STORM — FAST BOLTS, HARD WIND', '#ff9d5c', 24);
   }
@@ -121,10 +152,11 @@ export function createWorld(random) {
     kite.hull = kite.maxHull; kite.catcher = KITE.catcher;
     kite.invulnerable = 0; kite.dashT = 0; kite.dashCd = 0;
     state.score = 0; state.harvests = 0; state.strikesSeen = 0; state.hitsTaken = 0;
-    state.upgrades = {}; state.draftChoices = []; state.harvestChain = 0;
+    state.upgrades = {}; state.draftChoices = []; state.harvestChain = 0; state.chainTimer = 0;
+    state.dronePos = []; state.endAt = -1;
     state.lance = 0; state.lanceReadyAnnounced = false; state.secondUsed = false;
     state.elapsed = 0; state.shake = 0; state.flash = 0;
-    state.stats = { stormsCleared: 0, bossHits: 0, bestChain: 0 };
+    state.stats = { stormsCleared: 0, bossHits: 0, bestChain: 0, goldCaught: 0, droneCatches: 0 };
     state.over = false; state.victory = false; state.failReason = '';
     startStorm(0);
   }
@@ -160,7 +192,7 @@ export function createWorld(random) {
     const plated = state.upgrades.plating ? amount * 0.65 : amount;
     kite.hull -= Math.round(plated);
     kite.invulnerable = KITE.invulnerable;
-    state.hitsTaken += 1; state.harvestChain = 0;
+    state.hitsTaken += 1; state.harvestChain = 0; state.chainTimer = 0;
     state.shake = Math.max(state.shake, 9);
     burstParticles(entities, random, x, y, 16, '#ff8a5c', 260, 0.5, 3, 300);
     addFloater(entities, kite.x, kite.y - 34, `HULL -${Math.round(plated)}`, '#ff5d5d', 20);
@@ -171,15 +203,20 @@ export function createWorld(random) {
         addFloater(entities, kite.x, kite.y - 60, 'SECOND KITE! HULL RESTORED', '#69e58a', 24);
         burstParticles(entities, random, kite.x, kite.y, 40, '#69e58a', 340, 0.8, 3, 120);
       } else {
-        kite.hull = 0; state.over = true; state.failReason = 'Your kite was wrecked by the storm.';
+        kite.hull = 0; state.over = true; state.endAt = state.elapsed; state.failReason = 'Your kite was wrecked by the storm.';
         burstParticles(entities, random, kite.x, kite.y, 70, '#ffd257', 420, 1.1, 4, 260);
+        spawnRing(entities, kite.x, kite.y, 150, '#ff8a5c', 4, 0.7);
         events |= EVENT_OVER;
       }
     }
     return events;
   }
 
-  /** Fire the Storm Lance at the Supercell. Returns true when it fired. */
+  /** Fire the Storm Lance at the Supercell. Returns true when it fired.
+   *  Each hit also advances the boss's phase: at 2 hp the eye opens (a
+   *  spiral of mega-bolts answers, and column lashes begin); at 1 hp the
+   *  Supercell rages (twin tornadoes, faster barrages). Phase changes are
+   *  staged with EVENT_ROAR so main.js can answer with a roar. */
   function fireLance() {
     if (!boss.active || state.lance < STRIKE.lanceMax || state.over) return false;
     state.lance = 0; state.lanceReadyAnnounced = false;
@@ -187,48 +224,127 @@ export function createWorld(random) {
     state.score += Math.round(500 * state.difficulty.scoreMul);
     state.shake = 16; state.flash = 0.7;
     burstParticles(entities, random, boss.x, boss.y + 60, 60, '#c792ff', 480, 0.9, 4, 160);
+    spawnRing(entities, boss.x, boss.y + 40, 210, '#c792ff', 5, 0.7);
     addFloater(entities, boss.x, boss.y + 130, boss.hp > 0 ? `SUPERCELL HIT! ${boss.hp} TO GO` : 'SUPERCELL DOWN!', '#c792ff', 28);
+    if (boss.hp === 2) {
+      // Phase 1 — THE EYE OPENS: a spiral of six mega-bolts blooms around
+      // the cloud, landing in sequence. Harvest them to recharge fast.
+      for (let i = 0; i < 6; i += 1) {
+        const a = (i / 6) * Math.PI * 2;
+        const t = spawnTelegraph(entities, random, STRIKE.telegraphFast + i * 0.14, true);
+        if (t) {
+          t.x = Math.min(FIELD.width - 70, Math.max(70, boss.x + Math.cos(a) * 240));
+          t.y = Math.min(FIELD.horizonY - 50, Math.max(180, 330 + Math.sin(a) * 120));
+        }
+      }
+      boss.lashT = 3.5;
+      addFloater(entities, FIELD.width / 2, 250, 'THE EYE OPENS — IT IS AIMING AT YOU', '#ff6a4d', 26);
+      state.pendingRoar = true;
+    } else if (boss.hp === 1) {
+      // Phase 2 — ENRAGE: twin tornadoes and a scream of wind.
+      spawnTornado(entities, random, boss.x - 260);
+      spawnTornado(entities, random, boss.x + 260);
+      addFloater(entities, FIELD.width / 2, 250, 'THE SUPERCELL RAGES!', '#ff5d5d', 30);
+      state.pendingRoar = true;
+    }
     return true;
+  }
+
+  /** Bank a caught strike. `frac` is 1 for the kite, DRONE.chargeFrac for a
+   *  drone catch; `atX/atY` is where the catch happened (floater anchor). */
+  function bankHarvest(telegraph, frac, atX, atY) {
+    let events = 0;
+    state.harvestChain += 1;
+    state.chainTimer = state.upgrades.lattice ? CHAIN.latticeWindow : CHAIN.window;
+    state.stats.bestChain = Math.max(state.stats.bestChain, state.harvestChain);
+    if (state.harvestChain === 5 || state.harvestChain === 10 || state.harvestChain === 15 || state.harvestChain === 20) events |= EVENT_COMBO;
+    state.harvests += 1;
+    let charge = (telegraph.mega ? STRIKE.megaCharge : STRIKE.charge) + (state.upgrades.battery || 0) * 4;
+    if (telegraph.gold) charge *= GOLD.chargeMul;
+    if (state.upgrades.rods && state.harvests % 4 === 0) charge *= 2;
+    if (telegraph.gold && state.upgrades.cells) charge += 2 * state.upgrades.cells;
+    charge = Math.round(charge * frac);
+    if (!state.storm.boss) state.battery = Math.min(state.quota, state.battery + charge);
+    const surge = 1 + (state.upgrades.surge || 0) * 0.5;
+    const gained = Math.round(STRIKE.score * surge * chainMultiplier(state.harvestChain)
+      * state.difficulty.scoreMul * (telegraph.mega ? 2 : 1) * (telegraph.gold ? GOLD.scoreMul : 1) * frac);
+    state.score += gained;
+    const color = telegraph.gold ? '#fff3b0' : (frac < 1 ? '#8fd0ff' : '#ffe45e');
+    burstParticles(entities, random, atX, atY, telegraph.mega ? 34 : 22, color, 320, 0.6, 3, 60);
+    spawnRing(entities, atX, atY, telegraph.gold ? 110 : 74, color, telegraph.gold ? 4 : 3, 0.45);
+    addFloater(entities, atX, atY - 26,
+      frac < 1 ? `DRONE +${gained}` : (telegraph.gold ? `GOLD +${gained}!` : `+${gained}`), color, telegraph.gold ? 26 : 22);
+    if (state.harvestChain >= 3 && frac === 1) {
+      addFloater(entities, kite.x, kite.y - 52, `CHAIN ×${chainMultiplier(state.harvestChain).toFixed(1)}`, '#ffd257', 16);
+    }
+    events |= EVENT_HARVEST;
+    if (telegraph.gold) { events |= EVENT_GOLD; state.stats.goldCaught += 1; }
+    if (frac < 1) { events |= EVENT_DRONE; state.stats.droneCatches += 1; }
+    if (boss.active && (telegraph.mega || telegraph.gold)) {
+      // Mega-bolt energy also patches the kite: the boss fight sustains
+      // itself as long as you keep catching the big bolts. Golden strikes
+      // feed the Lance at half the mega rate.
+      kite.hull = Math.min(kite.maxHull, kite.hull + 4);
+      const feed = telegraph.mega ? STRIKE.lancePerMega : STRIKE.lancePerMega / 2;
+      const before = state.lance;
+      state.lance = Math.min(STRIKE.lanceMax, state.lance + feed * (1 + (state.upgrades.lance || 0) * 0.5) * frac);
+      if (state.lance >= STRIKE.lanceMax && before < STRIKE.lanceMax) {
+        events |= EVENT_LANCE_READY;
+        addFloater(entities, kite.x, kite.y - 56, 'STORM LANCE READY — SPACE!', '#c792ff', 26);
+      }
+    }
+    if (telegraph.gold && state.upgrades.cells) {
+      kite.hull = Math.min(kite.maxHull, kite.hull + 4 * state.upgrades.cells);
+    }
+    return events;
   }
 
   function resolveStrike(telegraph) {
     let events = EVENT_THUNDER;
-    const d2 = dist2(kite.x, kite.y, telegraph.x, telegraph.y);
-    const caught = d2 <= kite.catcher * kite.catcher;
-    landBolt(entities, random, telegraph, caught);
     state.strikesSeen += 1;
-    state.flash = Math.max(state.flash, telegraph.mega ? 0.55 : 0.35);
+    state.flash = Math.max(state.flash, telegraph.mega || telegraph.gold ? 0.55 : 0.35);
     state.shake = Math.max(state.shake, telegraph.mega ? 8 : 5);
-    if (caught) {
-      state.harvestChain += 1;
-      state.stats.bestChain = Math.max(state.stats.bestChain, state.harvestChain);
-      state.harvests += 1;
-      let charge = (telegraph.mega ? STRIKE.megaCharge : STRIKE.charge) + (state.upgrades.battery || 0) * 4;
-      if (state.upgrades.rods && state.harvests % 4 === 0) charge *= 2;
-      if (!state.storm.boss) state.battery = Math.min(state.quota, state.battery + charge);
-      const surge = 1 + (state.upgrades.surge || 0) * 0.5;
-      const gained = Math.round(STRIKE.score * surge * state.difficulty.scoreMul * (telegraph.mega ? 2 : 1));
-      state.score += gained;
-      burstParticles(entities, random, telegraph.x, telegraph.y, telegraph.mega ? 34 : 22, '#ffe45e', 320, 0.6, 3, 60);
-      addFloater(entities, telegraph.x, telegraph.y - 26, `+${gained}`, '#ffe45e', 22);
-      events |= EVENT_HARVEST;
-      if (boss.active && telegraph.mega) {
-        // Mega-bolt energy also patches the kite: the boss fight sustains
-        // itself as long as you keep catching the big bolts.
-        kite.hull = Math.min(kite.maxHull, kite.hull + 4);
-        const before = state.lance;
-        state.lance = Math.min(STRIKE.lanceMax, state.lance + STRIKE.lancePerMega * (1 + (state.upgrades.lance || 0) * 0.5));
-        if (state.lance >= STRIKE.lanceMax && before < STRIKE.lanceMax) {
-          events |= EVENT_LANCE_READY;
-          addFloater(entities, kite.x, kite.y - 56, 'STORM LANCE READY — SPACE!', '#c792ff', 26);
-        }
+
+    // The Supercell's column lash: a vertical band, not a ring. Caught by
+    // standing in the column (it feeds the Lance like a mega-bolt); the
+    // shockwave around it still bites.
+    if (telegraph.column) {
+      const dx = Math.abs(kite.x - telegraph.x);
+      const caught = dx <= LASH.catchHalfWidth;
+      landBolt(entities, random, telegraph, caught);
+      if (caught) {
+        events |= bankHarvest(telegraph, 1, kite.x, kite.y);
+      } else {
+        state.harvestChain = 0; state.chainTimer = 0;
+        if (dx <= LASH.shockHalfWidth) events |= damage(LASH.shockDamage, kite.x, kite.y);
+        burstParticles(entities, random, telegraph.x, FIELD.horizonY - 60, 14, '#c792ff', 240, 0.4, 2, 300);
       }
-    } else {
-      state.harvestChain = 0;
-      // Ground zero still stings: standing in the outer scorch ring hurts.
-      if (d2 <= (kite.catcher + 34) * (kite.catcher + 34)) events |= damage(6, kite.x, kite.y);
-      burstParticles(entities, random, telegraph.x, telegraph.y, 10, '#9fb4d8', 200, 0.4, 2, 300);
+      return events;
     }
+
+    const fp = telegraph.fork ? forkPoint(telegraph) : null;
+    const d2 = dist2(kite.x, kite.y, telegraph.x, telegraph.y);
+    const dFork2 = fp ? dist2(kite.x, kite.y, fp.x, fp.y) : Infinity;
+    const caught = d2 <= kite.catcher * kite.catcher || dFork2 <= kite.catcher * kite.catcher;
+    landBolt(entities, random, telegraph, caught);
+    if (fp) landBolt(entities, random, { x: fp.x, y: fp.y, mega: telegraph.mega }, caught);
+    if (caught) {
+      events |= bankHarvest(telegraph, 1, dFork2 < d2 ? fp.x : telegraph.x, dFork2 < d2 ? fp.y : telegraph.y);
+      return events;
+    }
+    // No kite catch — a drone may still bank it at half value.
+    for (const d of state.dronePos) {
+      if (dist2(d.x, d.y, telegraph.x, telegraph.y) <= DRONE.radius * DRONE.radius
+        || (fp && dist2(d.x, d.y, fp.x, fp.y) <= DRONE.radius * DRONE.radius)) {
+        events |= bankHarvest(telegraph, DRONE.chargeFrac, d.x, d.y);
+        return events;
+      }
+    }
+    state.harvestChain = 0; state.chainTimer = 0;
+    // Ground zero still stings: standing in the outer scorch ring hurts.
+    const near2 = Math.min(d2, dFork2);
+    if (near2 <= (kite.catcher + 34) * (kite.catcher + 34)) events |= damage(6, kite.x, kite.y);
+    burstParticles(entities, random, telegraph.x, telegraph.y, 10, '#9fb4d8', 200, 0.4, 2, 300);
     return events;
   }
 
@@ -238,6 +354,8 @@ export function createWorld(random) {
     const timeBonus = Math.round(state.timeLeft * 10 * state.difficulty.scoreMul);
     state.score += timeBonus + 250;
     addFloater(entities, FIELD.width / 2, 250, `STORM CLEARED! +${timeBonus + 250}`, '#69e58a', 30);
+    spawnRing(entities, FIELD.width / 2, 330, 320, '#69e58a', 4, 0.8);
+    spawnRing(entities, FIELD.width / 2, 330, 200, '#ffe45e', 3, 0.6);
     if (state.stormIndex >= STORMS.length - 1) { /* boss handled separately */ }
     if (state.endless && state.stormIndex === STORMS.length - 2) {
       state.endlessCycle += 1; startStorm(2 + (state.endlessCycle % 4)); return events;
@@ -258,6 +376,7 @@ export function createWorld(random) {
    */
   function step(dt, input, harmless) {
     let events = 0;
+    if (state.pendingRoar) { state.pendingRoar = false; events |= EVENT_ROAR; }
     state.elapsed += dt; state.screenTime += dt;
     if (state.bannerT > 0) state.bannerT -= dt;
     if (state.flash > 0) state.flash = Math.max(0, state.flash - dt * 2.2);
@@ -268,10 +387,22 @@ export function createWorld(random) {
 
     if (!harmless && !state.over && !state.victory) {
       state.stormTime += dt; state.timeLeft -= dt;
+      // Combo chains decay: keep harvesting or lose the multiplier.
+      if (state.chainTimer > 0) {
+        state.chainTimer -= dt;
+        if (state.chainTimer <= 0) { state.chainTimer = 0; state.harvestChain = 0; }
+      }
+      // The storm peaks in its final third: announced once, felt at once.
+      const stormTotal = state.storm.time + (state.upgrades.clock || 0) * 12;
+      if (!state.peakAnnounced && state.stormTime > stormTotal * 0.66) {
+        state.peakAnnounced = true;
+        events |= EVENT_PEAK;
+        addFloater(entities, FIELD.width / 2, 210, 'THE STORM PEAKS!', '#ff9d5c', 26);
+      }
       if (state.timeLeft <= 0) {
         state.timeLeft = 0;
-        if (state.storm.boss) { state.over = true; state.failReason = 'The Supercell outlasted you.'; events |= EVENT_OVER; }
-        else if (state.battery < state.quota) { state.over = true; state.failReason = `The town went dark — quota missed in ${state.storm.name}.`; events |= EVENT_OVER; }
+        if (state.storm.boss) { state.over = true; state.endAt = state.elapsed; state.failReason = 'The Supercell outlasted you.'; events |= EVENT_OVER; }
+        else if (state.battery < state.quota) { state.over = true; state.endAt = state.elapsed; state.failReason = `The town went dark — quota missed in ${state.storm.name}.`; events |= EVENT_OVER; }
       }
     }
 
@@ -322,22 +453,42 @@ export function createWorld(random) {
     kite.x = Math.min(FIELD.width - 26, Math.max(26, kite.x + kite.vx * dt));
     kite.y = Math.min(FIELD.horizonY - 8, Math.max(64, kite.y + kite.vy * dt));
     if (kite.vx > 24) kite.facing = 1; else if (kite.vx < -24) kite.facing = -1;
+    // Harvest drones hold a slow orbit around the kite; resolveStrike
+    // tests their catchers, render.js draws them at these positions.
+    const droneCount = state.upgrades.drone || 0;
+    state.dronePos.length = droneCount;
+    for (let i = 0; i < droneCount; i += 1) {
+      const a = state.elapsed * DRONE.orbitSpeed + (i * Math.PI * 2) / Math.max(1, droneCount) + i * 0.7;
+      state.dronePos[i] = {
+        x: Math.min(FIELD.width - 20, Math.max(20, kite.x + Math.cos(a) * DRONE.orbit)),
+        y: Math.min(FIELD.horizonY - 14, Math.max(58, kite.y + Math.sin(a) * DRONE.orbit * 0.72)),
+        angle: a,
+      };
+    }
 
     // --- Lightning director --------------------------------------------------
     if (!state.over && !state.victory) {
+      const peak = state.peakAnnounced ? 0.8 : 1; // cadence factor once the storm peaks
       state.strikeT -= dt;
       if (state.strikeT <= 0) {
         const fast = state.storm.miniboss || boss.active;
-        const t = spawnTelegraph(entities, random, fast ? STRIKE.telegraphFast : STRIKE.telegraph * range(random, 0.9, 1.2), false);
+        // Telegraphs shorten slightly with each storm and again at the peak,
+        // so late runs demand faster reads than early ones.
+        const teleMul = (1 - state.stormIndex * 0.03) * (state.peakAnnounced ? 0.92 : 1);
+        const gold = random() < GOLD.chance;
+        const fork = !gold && random() < state.storm.fork;
+        const base = gold ? GOLD.telegraph : (fast ? STRIKE.telegraphFast : STRIKE.telegraph * range(random, 0.9, 1.2));
+        const t = spawnTelegraph(entities, random, base * teleMul, false, { gold, fork });
         if (t && state.upgrades.magnet) { // Storm Magnet bends strikes toward the kite
           t.x = Math.min(FIELD.width - 70, Math.max(70, t.x + (kite.x - t.x) * 0.35 * state.upgrades.magnet));
           t.y = Math.min(FIELD.horizonY - 40, Math.max(120, t.y + (kite.y - t.y) * 0.25 * state.upgrades.magnet));
         }
         if (t) events |= EVENT_TELEGRAPH;
-        state.strikeT = state.storm.strikeEvery * state.difficulty.hazardMul ** -0.5 * range(random, 0.75, 1.25) + state.endlessCycle * -0.05;
+        state.strikeT = state.storm.strikeEvery * peak * state.difficulty.hazardMul ** -0.5 * range(random, 0.75, 1.25) + state.endlessCycle * -0.05;
         if (state.strikeT < 0.55) state.strikeT = 0.55;
       }
-      // Boss barrages: rings of mega-bolts around the Supercell.
+      // Boss barrages: rings of mega-bolts around the Supercell. The lower
+      // its health, the faster they come (phases in fireLance).
       if (boss.active) {
         boss.phase += dt;
         boss.x = FIELD.width / 2 + Math.sin(boss.phase * 0.45) * 300;
@@ -348,7 +499,17 @@ export function createWorld(random) {
             if (t) { t.x = Math.min(FIELD.width - 70, Math.max(70, boss.x + range(random, -330, 330))); t.y = range(random, 190, FIELD.horizonY - 50); }
           }
           events |= EVENT_TELEGRAPH;
-          boss.barrageT = BOSS.barrageEvery;
+          boss.barrageT = boss.hp >= 3 ? BOSS.barrageEvery : (boss.hp === 2 ? BOSS.barragePhase1 : BOSS.barragePhase2);
+        }
+        // Column lash (phase 1+): the eye marks the kite's position and a
+        // lightning column falls there a second later.
+        if (boss.hp < BOSS.hp) {
+          boss.lashT -= dt;
+          if (boss.lashT <= 0) {
+            const t = spawnTelegraph(entities, random, LASH.telegraph, true, { column: true });
+            if (t) { t.x = Math.min(FIELD.width - 60, Math.max(60, kite.x)); t.y = FIELD.horizonY - 60; events |= EVENT_TELEGRAPH; }
+            boss.lashT = LASH.every * range(random, 0.85, 1.2) * (boss.hp === 1 ? 0.8 : 1);
+          }
         }
         boss.tornadoT -= dt;
         if (boss.tornadoT <= 0) { spawnTornado(entities, random, boss.x); boss.tornadoT = BOSS.tornadoEvery; }
@@ -386,9 +547,11 @@ export function createWorld(random) {
     // --- Storm / boss outcomes ---------------------------------------------------
     if (!harmless && !state.over && !state.victory) {
       if (boss.active && boss.hp <= 0) {
-        state.victory = true; state.score += 1000;
+        state.victory = true; state.endAt = state.elapsed; state.score += 1000;
         burstParticles(entities, random, boss.x, boss.y, 120, '#c792ff', 520, 1.4, 5, 200);
         burstParticles(entities, random, boss.x, boss.y, 80, '#ffe45e', 420, 1.2, 4, 120);
+        spawnRing(entities, boss.x, boss.y, 340, '#c792ff', 6, 1.0);
+        spawnRing(entities, boss.x, boss.y, 220, '#ffe45e', 4, 0.8);
         events |= EVENT_VICTORY;
       } else if (!state.storm.boss && state.battery >= state.quota && state.quota > 0) {
         events |= clearStorm();
