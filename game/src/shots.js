@@ -26,11 +26,12 @@ function settle(world, seconds) {
 
 function stageLightningShow(world, random) {
   const e = world.state.entities;
-  // Two bolts caught mid-flash and three rings at different countdown stages.
-  const boltA = spawnTelegraph(e, random, 99, false); boltA.x = 330; boltA.y = 300;
-  landBolt(e, random, boltA, true); boltA.active = false;
-  const boltB = spawnTelegraph(e, random, 99, true); boltB.x = 905; boltB.y = 215;
-  landBolt(e, random, boltB, false); boltB.active = false;
+  // Four bolts caught mid-flash and three rings at different countdown stages.
+  const boltSpecs = [[330, 300, false, true], [905, 215, true, false], [1150, 330, true, false], [150, 250, false, true]];
+  for (const [bx, by, mega, caught] of boltSpecs) {
+    const tp = spawnTelegraph(e, random, 99, mega); tp.x = bx; tp.y = by;
+    landBolt(e, random, tp, caught); tp.active = false;
+  }
   for (const b of e.bolts) b.life = 0.05;
   const rings = [[520, 380, 0.35], [760, 330, 0.62], [1080, 420, 0.85]];
   for (const [x, y, frac] of rings) {
@@ -78,6 +79,7 @@ export function stageShot(name, world) {
     world.applyUpgrade('catcher'); world.applyUpgrade('lance'); world.applyUpgrade('hull'); world.applyUpgrade('dash');
     state.draftChoices = []; state.kite.hull = 57;
     settle(world, 0.5);
+    for (const f of e.floaters) f.active = false; // no stray announcements in the boss frame
     // Mega-bolt barrage ringing the Supercell + one normal ring near the kite.
     const megas = [[520, 250, 0.4], [880, 290, 0.65], [700, 430, 0.2], [1020, 180, 0.8]];
     for (const [x, y, frac] of megas) {
@@ -92,12 +94,20 @@ export function stageShot(name, world) {
 
   if (name === 'end') {
     world.reset('tempest', false);
+    // Advance to the true final state — storm 7/7, THE SUPERCELL, already
+    // beaten — so the HUD behind the victory panel agrees with its stats:
+    // storm 7/7, integrity 0/3, timer 0, score 28950, 137 harvested.
+    for (let i = 0; i < 6; i += 1) world.nextStorm();
     state.victory = true;
     state.score = 28950; state.harvests = 137; state.hitsTaken = 11;
     state.stats.stormsCleared = 7; state.stats.bossHits = 3; state.stats.bestChain = 14;
-    state.kite.hull = 43; state.elapsed = 90;
+    state.timeLeft = 0; state.bannerT = 0; state.lance = 0;
+    state.boss.hp = 0; // integrity empty: the Supercell is down
+    state.elapsed = 90;
     world.applyUpgrade('catcher'); world.applyUpgrade('rods'); world.applyUpgrade('surge');
+    state.kite.hull = 43;
     state.draftChoices = [];
+    for (const f of e.floaters) f.active = false;
     settle(world, 1.2);
     burstParticles(e, random, 640, 260, 50, '#ffd257', 380, 1.4, 4, 120);
     for (const p of e.particles) p.life = p.total * 0.35;
@@ -108,9 +118,11 @@ export function stageShot(name, world) {
   // Default: cover — title screen over the most dramatic storm we can stage.
   world.reset('tempest', false);
   state.elapsed = 12; state.bannerT = 0;
-  state.kite.x = 430; state.kite.y = 300;
+  state.kite.x = 468; state.kite.y = 332;
   settle(world, 1.5);
-  state.kite.x = 430; state.kite.y = 300; // settle drifts the kite; restore the hero pose
+  // Hero pose (settle drifts the kite, so restore it): a larger kite
+  // hovering at the edge of the nearest telegraph ring (520, 380).
+  state.kite.x = 468; state.kite.y = 332; state.kite.scale = 1.4;
   stageLightningShow(world, random);
   return { screen: SCREEN_TITLE, best: 0 };
 }

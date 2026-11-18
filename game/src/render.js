@@ -127,17 +127,25 @@ export function createRenderer(canvas) {
         }
       }
     }
-    // Three battery towers: they fill with charge as the quota climbs.
+    // Three battery towers, spread along the skyline (15% / 50% / 85% of the
+    // width), each mounted on its own rooftop plinth so they read as part of
+    // the town — and kept well clear of the bottom-left HULL/DASH bars.
     const frac = state.storm.boss ? 1 : (state.quota ? state.battery / state.quota : 0);
-    for (let t = 0; t < 3; t += 1) {
-      const tx = 90 + t * 34; const base = FIELD.groundY; const hgt = 86;
-      ctx.fillStyle = PALETTE.tower; ctx.fillRect(tx, base - hgt, 24, hgt);
+    const towerXs = [FIELD.width * 0.15, FIELD.width * 0.5, FIELD.width * 0.85];
+    towerXs.forEach((cx, t) => {
+      const base = FIELD.groundY - 24; const hgt = 86;
+      // Rooftop plinth the tower stands on.
+      ctx.fillStyle = PALETTE.town;
+      ctx.fillRect(cx - 30, FIELD.groundY - 24, 60, 24);
+      ctx.beginPath(); ctx.moveTo(cx - 34, FIELD.groundY - 24); ctx.lineTo(cx, FIELD.groundY - 38); ctx.lineTo(cx + 34, FIELD.groundY - 24); ctx.fill();
+      ctx.fillStyle = PALETTE.tower; ctx.fillRect(cx - 12, base - hgt, 24, hgt);
       const fillH = hgt * Math.max(0, Math.min(1, frac * 3 - t));
-      ctx.fillStyle = PALETTE.battery; ctx.fillRect(tx + 4, base - 6 - fillH, 16, fillH);
+      ctx.fillStyle = PALETTE.battery; ctx.fillRect(cx - 8, base - 6 - fillH, 16, fillH);
       ctx.fillStyle = frac * 3 - t >= 1 ? PALETTE.charge : '#42507a';
-      ctx.beginPath(); ctx.arc(tx + 12, base - hgt - 7, 6, 0, Math.PI * 2); ctx.fill();
-    }
-    text('TOWN BATTERIES', 84, FIELD.groundY + 34, 13, PALETTE.muted, 'left', '700');
+      ctx.beginPath(); ctx.arc(cx, base - hgt - 7, 6, 0, Math.PI * 2); ctx.fill();
+    });
+    // Label above the middle tower, in open sky — never over the HUD bars.
+    text('TOWN BATTERIES', FIELD.width * 0.5, FIELD.groundY - 24 - 86 - 22, 13, PALETTE.muted, 'center', '700');
   }
 
   function rainLayer(state) {
@@ -188,10 +196,10 @@ export function createRenderer(canvas) {
     for (const b of state.entities.bolts) {
       if (!b.active) continue;
       const alpha = 1 - b.life / b.total;
-      const width = b.mega ? 7 : 4.5;
+      const width = b.mega ? 10.5 : 6.5;
       for (const pass of [0, 1]) {
-        ctx.strokeStyle = pass === 0 ? `rgba(255,240,150,${alpha * 0.4})` : `rgba(255,255,255,${alpha})`;
-        ctx.lineWidth = pass === 0 ? width * 2.6 : width;
+        ctx.strokeStyle = pass === 0 ? `rgba(255,240,150,${alpha * 0.5})` : `rgba(255,255,255,${alpha})`;
+        ctx.lineWidth = pass === 0 ? width * 3.4 : width;
         ctx.beginPath();
         let x = b.x; let y = -10;
         ctx.moveTo(x + (seeded(b.seed) - 0.5) * 90, y);
@@ -258,32 +266,81 @@ export function createRenderer(canvas) {
 
   function bossDraw(state) {
     const boss = state.boss;
-    if (!boss.active && !state.victory) return;
-    if (state.victory) return;
+    if (!boss.active || state.victory) return;
     const flash = boss.flash > 0;
-    // The living cloud: stacked dark ellipses with a glowing core eye.
-    for (let i = 0; i < 6; i += 1) {
-      const off = (seeded(i * 41) - 0.5) * 190;
-      const yy = boss.y + (seeded(i * 43) - 0.5) * 44;
-      const wdt = 120 - Math.abs(off) * 0.32;
-      ctx.fillStyle = flash ? 'rgba(120,90,180,0.92)' : `rgba(${34 + i * 4},${32 + i * 3},${58 + i * 6},0.94)`;
-      ctx.beginPath(); ctx.ellipse(boss.x + off, yy, wdt, 44 + seeded(i * 47) * 20, 0, 0, Math.PI * 2); ctx.fill();
+    const x = boss.x; const y = boss.y; const t = state.elapsed;
+    // Purple under-glow spilling from the belly of the cloud.
+    const glow = ctx.createRadialGradient(x, y + 84, 12, x, y + 84, 240);
+    glow.addColorStop(0, 'rgba(168,96,255,0.32)'); glow.addColorStop(1, 'rgba(168,96,255,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath(); ctx.arc(x, y + 84, 240, 0, Math.PI * 2); ctx.fill();
+    // Rain shaft: a translucent curtain falling from the cloud to the sea.
+    const shaft = ctx.createLinearGradient(0, y + 52, 0, FIELD.horizonY);
+    shaft.addColorStop(0, 'rgba(158,188,235,0.20)'); shaft.addColorStop(1, 'rgba(158,188,235,0.04)');
+    ctx.fillStyle = shaft;
+    ctx.beginPath();
+    ctx.moveTo(x - 128, y + 52); ctx.lineTo(x + 128, y + 52);
+    ctx.lineTo(x + 168, FIELD.horizonY); ctx.lineTo(x - 168, FIELD.horizonY);
+    ctx.closePath(); ctx.fill();
+    ctx.strokeStyle = 'rgba(180,205,245,0.20)'; ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    for (let i = 0; i < 22; i += 1) {
+      const sx = x - 120 + seeded(i * 17) * 240;
+      const sy = y + 58 + ((seeded(i * 29) * 300 + t * 340) % 420);
+      ctx.moveTo(sx, sy); ctx.lineTo(sx + 7, sy + 44);
     }
-    const pulse = 0.7 + Math.sin(state.elapsed * 5) * 0.3;
-    const eye = ctx.createRadialGradient(boss.x, boss.y + 6, 2, boss.x, boss.y + 6, 34);
-    eye.addColorStop(0, `rgba(255,120,120,${pulse})`); eye.addColorStop(1, 'rgba(255,60,60,0)');
-    ctx.fillStyle = eye; ctx.beginPath(); ctx.arc(boss.x, boss.y + 6, 34, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(boss.x, boss.y + 6, 6 + pulse * 3, 0, Math.PI * 2); ctx.fill();
-    text(BOSS.name, boss.x, boss.y - 92, 24, '#ffb0b0', 'center', '900');
-    bar(boss.x - 130, boss.y - 78, 260, 13, boss.hp / boss.maxHp, '#ff5d5d');
-    text(`SUPERCELL INTEGRITY ${boss.hp}/${boss.maxHp}`, boss.x, boss.y - 88 - 22, 13, PALETTE.muted, 'center', '700');
+    ctx.stroke();
+    // One layered cloud mass — shelf, lobes, dome, belly, back to front —
+    // so the Supercell reads as a single strong silhouette, not loose blobs.
+    // (Its name / integrity / lance live in the HUD header, never here.)
+    const mass = [
+      [0, 44, 208, 56, 'rgba(38,36,66,0.97)'],
+      [-108, -20, 110, 54, 'rgba(52,49,84,0.97)'],
+      [110, -22, 114, 56, 'rgba(52,49,84,0.97)'],
+      [0, -50, 126, 58, 'rgba(74,69,112,0.97)'],
+      [0, 10, 172, 74, 'rgba(62,58,96,0.98)'],
+    ];
+    for (const [ox, oy, rx, ry, fill] of mass) {
+      ctx.fillStyle = flash ? 'rgba(150,120,220,0.95)' : fill;
+      ctx.beginPath(); ctx.ellipse(x + ox, y + oy, rx, ry, 0, 0, Math.PI * 2); ctx.fill();
+    }
+    // Dark outline along the belly + pale rim light on the dome.
+    ctx.strokeStyle = 'rgba(6,5,18,0.65)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.ellipse(x, y + 8, 200, 88, 0, 0.15 * Math.PI, 0.85 * Math.PI); ctx.stroke();
+    ctx.strokeStyle = 'rgba(216,210,255,0.38)'; ctx.lineWidth = 3;
+    ctx.beginPath(); ctx.ellipse(x, y - 50, 126, 58, 0, Math.PI * 1.12, Math.PI * 1.88); ctx.stroke();
+    // Rotating band arcs sweeping around the mass, clipped to its belly.
+    ctx.save();
+    ctx.beginPath(); ctx.ellipse(x, y + 10, 196, 86, 0, 0, Math.PI * 2); ctx.clip();
+    for (let i = 0; i < 3; i += 1) {
+      const r = 158 - i * 34;
+      const start = t * (0.55 + i * 0.16) + i * 2.1;
+      ctx.strokeStyle = `rgba(172,160,228,${0.34 - i * 0.07})`;
+      ctx.lineWidth = 13 - i * 3;
+      ctx.beginPath(); ctx.arc(x, y + 10, r, start, start + 1.85); ctx.stroke();
+    }
+    ctx.restore();
+    // The great glowing eye: halo, iris, hot core, spark.
+    const pulse = 0.72 + Math.sin(t * 5) * 0.28;
+    const eyeGlow = ctx.createRadialGradient(x, y + 16, 4, x, y + 16, 72);
+    eyeGlow.addColorStop(0, `rgba(255,96,64,${0.85 * pulse})`); eyeGlow.addColorStop(1, 'rgba(255,60,40,0)');
+    ctx.fillStyle = eyeGlow; ctx.beginPath(); ctx.arc(x, y + 16, 72, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ff6a4d'; ctx.beginPath(); ctx.arc(x, y + 16, 24, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffd23e'; ctx.beginPath(); ctx.arc(x, y + 16, 12, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff6ec'; ctx.beginPath(); ctx.arc(x, y + 16, 4.5, 0, Math.PI * 2); ctx.fill();
+    if (flash) {
+      ctx.fillStyle = 'rgba(200,160,255,0.30)';
+      ctx.beginPath(); ctx.ellipse(x, y + 8, 200, 88, 0, 0, Math.PI * 2); ctx.fill();
+    }
+    void BOSS;
   }
 
   function kiteDraw(state) {
     const k = state.kite;
+    const s = k.scale || 1; // staged scenes (cover) may pose a larger hero kite
     if (k.invulnerable > 0 && Math.floor(state.elapsed * 14) % 2 === 0 && k.dashT <= 0) { /* blink */ }
     else {
-      ctx.save(); ctx.translate(k.x, k.y); ctx.scale(k.facing, 1);
+      ctx.save(); ctx.translate(k.x, k.y); ctx.scale(k.facing * s, s);
       ctx.rotate(k.vy * 0.0006);
       // Kite sail: a bright diamond with ribs and a charged rim.
       ctx.fillStyle = '#ffb03a';
@@ -302,18 +359,18 @@ export function createRenderer(canvas) {
       ctx.strokeStyle = 'rgba(255,176,58,0.75)'; ctx.lineWidth = 2.5;
       ctx.beginPath();
       for (let i = 0; i <= 4; i += 1) {
-        const tx = k.x - k.facing * (26 + i * 11);
-        const ty = k.y + 20 + Math.sin(state.elapsed * 9 + i * 1.4) * 6 + i * 3;
+        const tx = k.x - k.facing * (26 + i * 11) * s;
+        const ty = k.y + 20 * s + Math.sin(state.elapsed * 9 + i * 1.4) * 6 * s + i * 3 * s;
         if (i === 0) ctx.moveTo(tx, ty); else ctx.lineTo(tx, ty);
       }
       ctx.stroke();
       // String down toward the town.
       ctx.strokeStyle = 'rgba(230,238,255,0.4)'; ctx.lineWidth = 1.2;
-      ctx.beginPath(); ctx.moveTo(k.x, k.y + 24); ctx.lineTo(k.x - 30, FIELD.groundY); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(k.x, k.y + 24 * s); ctx.lineTo(k.x - 30, FIELD.groundY); ctx.stroke();
     }
     if (k.dashT > 0) {
       ctx.strokeStyle = 'rgba(160,220,255,0.6)'; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.arc(k.x, k.y, 34 + (0.22 - k.dashT) * 60, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(k.x, k.y, (34 + (0.22 - k.dashT) * 60) * s, 0, Math.PI * 2); ctx.stroke();
     }
   }
 
@@ -336,16 +393,24 @@ export function createRenderer(canvas) {
 
   // ---- HUD ---------------------------------------------------------------------
   function hud(state, screen) {
-    // Top bar panel.
-    ctx.fillStyle = 'rgba(8,12,26,0.72)'; ctx.fillRect(0, 0, FIELD.width, 64);
-    ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fillRect(0, 64, FIELD.width, 1);
+    // Top bar panel. On the boss storm it grows taller so the objective,
+    // SUPERCELL INTEGRITY and Storm Lance each get their own row inside it.
+    const stripH = state.storm.boss ? 92 : 64;
+    ctx.fillStyle = 'rgba(8,12,26,0.72)'; ctx.fillRect(0, 0, FIELD.width, stripH);
+    ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fillRect(0, stripH, FIELD.width, 1);
     text(`STORM ${state.stormIndex + 1}/7 — ${state.storm.name}`, 22, 28, 20, PALETTE.text, 'left', '800');
     text(state.endless ? `ENDLESS CYCLE ${state.endlessCycle + 1} · ${state.difficulty.label}` : state.difficulty.label, 22, 52, 14, PALETTE.muted, 'left', '600');
     // Quota / boss centrepiece.
     if (state.storm.boss) {
-      text('⚡ HARVEST MEGA-BOLTS → CHARGE THE LANCE → SPACE TO FIRE ⚡', FIELD.width / 2, 28, 17, '#c792ff', 'center', '800');
-      bar(FIELD.width / 2 - 170, 38, 340, 14, state.lance / STRIKE.lanceMax, PALETTE.lance);
-      text(state.lance >= STRIKE.lanceMax ? 'LANCE READY — SPACE!' : `Storm Lance ${Math.floor(state.lance)}%`, FIELD.width / 2, 62 - 24 + 24, 13, PALETTE.text, 'center', '700');
+      // Boss header stack, one element per row, all inside the taller strip:
+      // objective (y25) · INTEGRITY label+bar (y55–67) · LANCE label+bar
+      // (y74–86). Nothing overlaps the storm title, the timer, or the boss
+      // itself (the Supercell is drawn below the strip, eye at boss.y+16).
+      text('⚡ HARVEST MEGA-BOLTS → CHARGE THE LANCE → SPACE TO FIRE ⚡', FIELD.width / 2, 25, 16, '#c792ff', 'center', '800');
+      text(`INTEGRITY ${state.boss.hp}/${state.boss.maxHp}`, 462, 66, 13, '#ffb0b0', 'right', '800');
+      bar(470, 55, 340, 12, state.boss.maxHp ? state.boss.hp / state.boss.maxHp : 0, '#ff5d5d');
+      text(state.lance >= STRIKE.lanceMax ? 'LANCE READY — SPACE!' : `LANCE ${Math.floor(state.lance)}%`, 462, 85, 13, '#c792ff', 'right', '800');
+      bar(470, 74, 340, 12, state.lance / STRIKE.lanceMax, PALETTE.lance);
     } else {
       text(`BATTERY ${state.battery} / ${state.quota}`, FIELD.width / 2, 26, 18, PALETTE.text, 'center', '800');
       bar(FIELD.width / 2 - 170, 34, 340, 14, state.quota ? state.battery / state.quota : 0, PALETTE.battery);
@@ -373,8 +438,10 @@ export function createRenderer(canvas) {
       if (rank > 1) text(String(rank), ux + 22, FIELD.height - 70, 10, PALETTE.gold, 'center', '800');
     }
     if (state.muted) text('🔇 M', FIELD.width - 22, 84, 14, PALETTE.muted, 'right', '700');
-    // Storm banner for the first seconds of each storm.
-    if (state.bannerT > 0 && screen === SCREEN_PLAY) {
+    // Storm banner for the first seconds of each storm. The boss storm
+    // skips it: its header stack already announces the Supercell, and a
+    // banner on top of the fight would collide with it.
+    if (state.bannerT > 0 && screen === SCREEN_PLAY && !state.storm.boss) {
       const a = Math.min(1, state.bannerT);
       ctx.globalAlpha = a;
       ctx.fillStyle = 'rgba(8,12,26,0.66)'; ctx.fillRect(290, 120, 700, 92);

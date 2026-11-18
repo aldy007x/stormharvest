@@ -95,6 +95,9 @@ export function createWorld(random) {
   }
 
   function startStorm(index) {
+    // Floaters belong to the storm that spawned them: never let one storm's
+    // announcement (e.g. the mini-boss warning) leak into the next storm.
+    for (const f of entities.floaters) f.active = false;
     state.stormIndex = index;
     state.storm = STORMS[index];
     state.stormTime = 0;
