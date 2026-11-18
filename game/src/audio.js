@@ -110,6 +110,8 @@ export function createAudio() {
     droneZap() { tone(520, 760, 0.12, 'triangle', 0.12); tone(1040, 1040, 0.08, 'triangle', 0.07, 0.05); },
     /** The storm peaks: a rising wind sting under a warning tone. */
     peak() { burst(0.9, 700, 0.22, 0, 'bandpass'); tone(220, 440, 0.7, 'sawtooth', 0.07); },
+    /** Storm Season begins: a rising sweep into a distant thunderclap. */
+    season() { tone(196, 392, 0.5, 'sawtooth', 0.08); tone(392, 784, 0.6, 'sawtooth', 0.07, 0.12); burst(0.9, 300, 0.28, 0.3); tone(98, 196, 0.7, 'triangle', 0.1, 0.1); },
     /** The Supercell changes phase: a deep roar of wind and sub-bass. */
     roar() { burst(1.2, 160, 0.6); tone(70, 38, 1.1, 'sawtooth', 0.32); tone(196, 98, 0.8, 'sawtooth', 0.12, 0.1); },
     hit() { burst(0.25, 300, 0.4); tone(160, 60, 0.25, 'sawtooth', 0.2); },

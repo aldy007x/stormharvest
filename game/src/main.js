@@ -11,7 +11,7 @@
 // stages that deterministic scene instead of running the loop, paints it
 // twice and sets window.__shotReady for the screenshot harness.
 
-import { BEST_KEY, STEP, WIN_KEY } from './config.js';
+import { BEST_KEY, SEASON_KEY, STEP, WIN_KEY } from './config.js';
 import { createRandom } from './random.js';
 import {
   createWorld, EVENT_BOSS_HIT, EVENT_COMBO, EVENT_DASH, EVENT_DRAFT, EVENT_DRONE, EVENT_GOLD,
@@ -38,6 +38,7 @@ const audio = createAudio();
 function readFlag(key) { try { return window.localStorage.getItem(key); } catch { return null; } }
 function writeFlag(key, value) { try { window.localStorage.setItem(key, value); } catch { /* private mode: lasts this visit only */ } }
 function readBest() { return Number.parseInt(readFlag(BEST_KEY) ?? '0', 10) || 0; }
+function readSeasonBest() { return Number.parseInt(readFlag(SEASON_KEY) ?? '0', 10) || 0; }
 
 function runShot(name) {
   const scene = stageShot(name, world);
@@ -56,23 +57,29 @@ function runGame() {
   const input = createInput(canvas);
   let screen = SCREEN_TITLE;
   let best = readBest();
+  let seasonBest = readSeasonBest();
   let wonOnce = readFlag(WIN_KEY) === '1';
   let accumulator = 0;
   let last = performance.now();
   let chosenDifficulty = 'tempest';
+  let currentMode = 'campaign';
 
   function announce(message) { status.textContent = message; }
   function saveBest() {
-    if (world.state.score > best) { best = world.state.score; writeFlag(BEST_KEY, String(best)); }
+    if (world.state.season) {
+      if (world.state.score > seasonBest) { seasonBest = world.state.score; writeFlag(SEASON_KEY, String(seasonBest)); }
+    } else if (world.state.score > best) { best = world.state.score; writeFlag(BEST_KEY, String(best)); }
   }
-  function startGame(endless) {
-    world.reset(chosenDifficulty, endless);
+  function startGame(mode) {
+    currentMode = mode;
+    world.reset(chosenDifficulty, mode);
     accumulator = 0;
     screen = SCREEN_PLAY;
     audio.unlock(); audio.setIntensity(0.3);
-    announce(endless ? 'Endless mode. Survive the cycle.' : `Storm 1. Fill the batteries before the timer ends.`);
+    if (mode === 'season') { audio.season(); announce('Storm Season. Endless storms, rematch bosses — chase the score.'); }
+    else announce(mode === 'endless' ? 'Endless mode. Survive the cycle.' : `Storm 1. Fill the batteries before the timer ends.`);
   }
-  function toTitle() { screen = SCREEN_TITLE; world.reset(chosenDifficulty, false); announce('Stormharvest. Choose a difficulty to start.'); }
+  function toTitle() { screen = SCREEN_TITLE; currentMode = 'campaign'; world.reset(chosenDifficulty, 'campaign'); announce('Stormharvest. Choose a difficulty to start.'); }
 
   function handleEvents(events) {
     if (events & EVENT_TELEGRAPH) audio.telegraphHum();
@@ -124,10 +131,11 @@ function runGame() {
       for (const b of buttons) {
         if (click.x < b.x || click.x > b.x + b.w || click.y < b.y || click.y > b.y + b.h) continue;
         audio.click();
-        if (b.id.startsWith('diff:')) { chosenDifficulty = b.id.slice(5); startGame(false); }
-        else if (b.id === 'endless') { if (wonOnce) startGame(true); }
+        if (b.id.startsWith('diff:')) { chosenDifficulty = b.id.slice(5); startGame('campaign'); }
+        else if (b.id === 'endless') { if (wonOnce) startGame('endless'); }
+        else if (b.id === 'season') startGame('season');
         else if (b.id.startsWith('upgrade:')) pickUpgrade(b.id.slice(8));
-        else if (b.id === 'restart') startGame(world.state.endless);
+        else if (b.id === 'restart') startGame(currentMode);
         else if (b.id === 'title') toTitle();
         else if (b.id === 'resume') screen = SCREEN_PLAY;
         return;
@@ -135,7 +143,7 @@ function runGame() {
       // Clicking the charged Lance bar area also fires it.
       if (screen === SCREEN_PLAY && world.state.boss.active && world.state.lance >= 100
         && click.x > 470 && click.x < 810 && click.y < 70) {
-        if (world.fireLance()) { audio.lanceFire(); handleEvents(EVENT_BOSS_HIT | (world.state.boss.hp <= 0 ? EVENT_VICTORY : 0)); }
+        if (world.fireLance()) { audio.lanceFire(); handleEvents(EVENT_BOSS_HIT | (world.state.boss.hp <= 0 && !world.state.season ? EVENT_VICTORY : 0)); }
       }
     }
   }
@@ -146,7 +154,7 @@ function runGame() {
     if (screen === SCREEN_TITLE) {
       const digit = input.digit();
       if (digit >= 1 && digit <= 3) chosenDifficulty = ['calm', 'tempest', 'maelstrom'][digit - 1];
-      if (actions & ACTION_CONFIRM) startGame(false);
+      if (actions & ACTION_CONFIRM) startGame('campaign');
       return;
     }
     if (screen === SCREEN_DRAFT) {
@@ -154,14 +162,14 @@ function runGame() {
       if (digit >= 1 && digit <= 3 && world.state.draftChoices[digit - 1]) pickUpgrade(world.state.draftChoices[digit - 1].id);
       return;
     }
-    if ((screen === SCREEN_OVER || screen === SCREEN_VICTORY) && (actions & (ACTION_RESTART | ACTION_CONFIRM))) { startGame(world.state.endless); return; }
+    if ((screen === SCREEN_OVER || screen === SCREEN_VICTORY) && (actions & (ACTION_RESTART | ACTION_CONFIRM))) { startGame(currentMode); return; }
     if (actions & ACTION_PAUSE) {
       if (screen === SCREEN_PLAY) { screen = SCREEN_PAUSED; announce('Paused.'); }
       else if (screen === SCREEN_PAUSED) { screen = SCREEN_PLAY; announce('Playing.'); }
       return;
     }
     if (screen === SCREEN_PLAY && (actions & ACTION_CONFIRM) && world.state.boss.active) {
-      if (world.fireLance()) { audio.lanceFire(); handleEvents(EVENT_BOSS_HIT | (world.state.boss.hp <= 0 ? EVENT_VICTORY : 0)); }
+      if (world.fireLance()) { audio.lanceFire(); handleEvents(EVENT_BOSS_HIT | (world.state.boss.hp <= 0 && !world.state.season ? EVENT_VICTORY : 0)); }
     }
   }
 
@@ -186,7 +194,7 @@ function runGame() {
     if (screen === SCREEN_TITLE || screen === SCREEN_PLAY) {
       while (accumulator >= STEP && (screen === SCREEN_TITLE || screen === SCREEN_PLAY)) { step(); accumulator -= STEP; }
     } else accumulator = 0;
-    renderer.draw(world.state, screen, best);
+    renderer.draw(world.state, screen, world.state.season ? Math.max(seasonBest, world.state.score) : best);
   }
 
   document.addEventListener('visibilitychange', () => {

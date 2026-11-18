@@ -23,7 +23,7 @@
 //      value, so positioning the orbit matters as much as the kite.
 //   6. Hazards — hail shards, gusts, tornadoes chip the hull; hull 0 = wreck.
 //   7. Draft — clearing a storm's quota opens a draft of 3 upgrades drawn
-//      from a pool of 17; the run builds a different harvester each time.
+//      from a pool of 20; the run builds a different harvester each time.
 //   8. Boss — THE SUPERCELL has 3 health and three phases. Its mega-bolts
 //      charge the Storm Lance when harvested; a full Lance fires (Space /
 //      click the Lance) for one hit. Losing health opens the eye (spiral
@@ -32,10 +32,17 @@
 //   9. Scoring — harvests (chain- and surge-scaled), storm clears, boss
 //      hits, time bonuses, all scaled by difficulty; Endless mode keeps
 //      escalating after a victory.
+//  10. Storm Season — a second mode beside the campaign: storms are
+//      generated from the six authored templates and escalated by depth
+//      (growing quotas, quicker cadence, darker skies), a draft follows
+//      every storm, and every fifth storm is a Supercell rematch whose
+//      integrity grows per appearance. There is no victory in the
+//      Season — the run ends only when the sky wins, and depth is the
+//      score chase.
 // step() returns EVENT_* bit flags so main.js can react (sound, screens)
 // without the world knowing about either.
 
-import { BOSS, CHAIN, DIFFICULTIES, DRONE, FIELD, GOLD, GUST, HAIL, KITE, LASH, STRIKE, TORNADO } from './config.js';
+import { BOSS, CHAIN, DIFFICULTIES, DRONE, FIELD, GOLD, GUST, HAIL, KITE, LASH, SEASON, STRIKE, TORNADO } from './config.js';
 import { addFloater, burstParticles, clearEntities, createEntities, forkPoint, landBolt, spawnGust, spawnHail, spawnRing, spawnTelegraph, spawnTornado, stepEntities } from './entities.js';
 import { pick, range } from './random.js';
 
@@ -75,7 +82,7 @@ export function chainMultiplier(chain) {
   return 1 + Math.min(chain, CHAIN.cap) * CHAIN.perStep;
 }
 
-/** The upgrade pool (17). Draft offers 3 distinct, not-yet-maxed choices. */
+/** The upgrade pool (20). Draft offers 3 distinct, not-yet-maxed choices. */
 export const UPGRADES = [
   { id: 'catcher', name: 'Wide Catcher', icon: '◉', max: 3, desc: '+22 harvest radius per rank. Forgiving rings, greedier routes.' },
   { id: 'hull', name: 'Reinforced Hull', icon: '⬢', max: 3, desc: '+25 max hull and repair 25 now.' },
@@ -94,6 +101,9 @@ export const UPGRADES = [
   { id: 'drone', name: 'Harvest Drone', icon: '✛', max: 2, desc: 'A drone orbits your kite and banks strikes landing in its catcher at half value.' },
   { id: 'lattice', name: 'Chain Lattice', icon: '⌘', max: 1, desc: 'Your combo chain survives far longer between harvests (4.5s → 7.5s).' },
   { id: 'cells', name: 'Storm Cells', icon: '✜', max: 2, desc: 'Golden harvests also repair 4 hull and pay +2 bonus charge.' },
+  { id: 'dynamo', name: 'Chain Dynamo', icon: '⚙', max: 2, desc: 'While your chain is 5 or more, every harvest leaks +3 extra charge per rank straight into the batteries.' },
+  { id: 'gilded', name: 'Gilded Rod', icon: '♛', max: 2, desc: 'Golden strikes fall 6% more often per rank, and catching one stretches your combo chain window.' },
+  { id: 'swarm', name: 'Swarm Protocol', icon: '❖', max: 1, desc: 'Your drones grow: wider catchers, and their catches bank 75% of the charge and score instead of half.' },
 ];
 
 const dist2 = (ax, ay, bx, by) => { const dx = ax - bx; const dy = ay - by; return dx * dx + dy * dy; };
@@ -104,12 +114,12 @@ export function createWorld(random) {
     x: FIELD.width / 2, y: 330, vx: 0, vy: 0, hull: KITE.hull, maxHull: KITE.hull,
     catcher: KITE.catcher, invulnerable: 0, dashT: 0, dashCd: 0, dashDirX: 1, dashDirY: 0, facing: 1,
   };
-  const boss = { active: false, x: FIELD.width / 2, y: BOSS.y, hp: BOSS.hp, maxHp: BOSS.hp, phase: 0, barrageT: 3, tornadoT: 5, lashT: 7, flash: 0 };
+  const boss = { active: false, x: FIELD.width / 2, y: BOSS.y, hp: BOSS.hp, maxHp: BOSS.hp, phase: 0, barrageT: 3, tornadoT: 5, lashT: 7, flash: 0, enterT: 0 };
   const state = {
     entities, kite, boss,
     screenTime: 0, elapsed: 0, stormIndex: 0, storm: STORMS[0], stormTime: 0, timeLeft: STORMS[0].time,
     battery: 0, quota: STORMS[0].quota, score: 0, harvests: 0, strikesSeen: 0, hitsTaken: 0,
-    difficulty: DIFFICULTIES.tempest, endless: false, endlessCycle: 0,
+    difficulty: DIFFICULTIES.tempest, endless: false, endlessCycle: 0, season: false, seasonLevel: 0,
     upgrades: {}, draftChoices: [], harvestChain: 0, chainTimer: 0,
     dronePos: [], peakAnnounced: false, endAt: -1,
     strikeT: 1.2, hailT: 1, gustT: 4, lance: 0, lanceReadyAnnounced: false,
@@ -124,29 +134,91 @@ export function createWorld(random) {
     return Math.round(s.quota * state.difficulty.quotaMul) + state.endlessCycle * 24;
   }
 
-  function startStorm(index) {
+  /** Shared storm setup for any storm definition (authored or generated). */
+  function beginStorm(def) {
     // Floaters belong to the storm that spawned them: never let one storm's
     // announcement (e.g. the mini-boss warning) leak into the next storm.
     for (const f of entities.floaters) f.active = false;
-    state.stormIndex = index;
-    state.storm = STORMS[index];
+    state.storm = def;
     state.stormTime = 0;
-    state.timeLeft = state.storm.time + (state.upgrades.clock || 0) * 12;
+    state.timeLeft = def.time + (state.upgrades.clock || 0) * 12;
     state.battery = 0;
     state.quota = currentQuota();
     state.bannerT = 3;
     state.strikeT = 1.1; state.hailT = 1.4; state.gustT = 3;
     state.peakAnnounced = false;
-    boss.active = !!state.storm.boss;
-    if (boss.active) { boss.hp = BOSS.hp; boss.phase = 0; boss.barrageT = 2.5; boss.tornadoT = 4; boss.lashT = 6; state.lance = 0; }
-    for (let i = 0; i < state.storm.tornadoes; i += 1) spawnTornado(entities, random);
-    if (state.storm.miniboss) addFloater(entities, FIELD.width / 2, 210, 'MINI-BOSS STORM — FAST BOLTS, HARD WIND', '#ff9d5c', 24);
+    boss.active = !!def.boss;
+    boss.enterT = boss.active ? 1.15 : 0; // the Supercell descends before it fights
+    if (boss.active) { boss.hp = def.bossHp || BOSS.hp; boss.maxHp = boss.hp; boss.phase = 0; boss.barrageT = 2.5; boss.tornadoT = 4; boss.lashT = 6; state.lance = 0; }
+    for (let i = 0; i < def.tornadoes; i += 1) spawnTornado(entities, random);
+    if (def.miniboss) addFloater(entities, FIELD.width / 2, 210, 'MINI-BOSS STORM — FAST BOLTS, HARD WIND', '#ff9d5c', 24);
   }
 
-  function reset(difficultyId = 'tempest', endless = false) {
+  function startStorm(index) {
+    state.stormIndex = index;
+    beginStorm(STORMS[index]);
+  }
+
+  /** Storm Season generation: the six authored non-boss templates,
+   *  escalated by depth and renamed under a rotating prefix, so the
+   *  season reads as endless weather rather than numbered levels. */
+  const SEASON_PREFIXES = ['EMBER', 'GLASS', 'IRON', 'VELVET', 'HOLLOW', 'STATIC', 'CRIMSON', 'PALE', 'THUNDER', 'SABLE'];
+  const SEASON_TAGS = [
+    'The season deepens. Keep the chain alive.',
+    'New weather, same bargain: charge or darkness.',
+    'The sky is inventing storms now. Improvise.',
+    'Deeper in the season, the gold falls faster.',
+    'Every storm you clear makes the next one personal.',
+  ];
+
+  function makeSeasonStorm(level) {
+    const base = STORMS[level % 6];
+    return {
+      name: `${SEASON_PREFIXES[Math.floor(level / 6) % SEASON_PREFIXES.length]} ${base.name}`,
+      tag: SEASON_TAGS[level % SEASON_TAGS.length],
+      quota: Math.round(base.quota * (1 + level * SEASON.quotaGrowth)),
+      time: Math.max(55, Math.round(base.time - level * SEASON.timeLoss)),
+      strikeEvery: Math.max(0.85, base.strikeEvery * Math.pow(SEASON.cadenceDecay, level)),
+      hail: Math.min(2.6, base.hail + level * SEASON.hailGrowth),
+      gustEvery: base.gustEvery,
+      tornadoes: base.tornadoes,
+      dark: Math.min(1, base.dark + level * SEASON.darkGrowth),
+      wind: base.wind,
+      fork: Math.min(0.4, base.fork + level * SEASON.forkGrowth),
+      tint: base.tint,
+      miniboss: !!base.miniboss,
+    };
+  }
+
+  /** The Season's Supercell rematch: same authored boss, +1 integrity
+   *  per appearance, so depth is measured in lance hits as well. */
+  function makeSeasonBoss(level) {
+    const hp = 3 + Math.floor(level / SEASON.bossEvery);
+    return {
+      ...STORMS[6],
+      tag: `REMATCH — the Supercell returns with ${hp} integrity. Break it again.`,
+      bossHp: hp,
+      strikeEvery: Math.max(1.1, STORMS[6].strikeEvery - level * 0.02),
+    };
+  }
+
+  function startSeasonStorm(level) {
+    state.seasonLevel = level;
+    state.stormIndex = level;
+    beginStorm((level + 1) % SEASON.bossEvery === 0 ? makeSeasonBoss(level) : makeSeasonStorm(level));
+  }
+
+  /** `mode`: 'campaign' (the authored seven storms), 'endless' (cycles
+   *  after a victory) or 'season' (Storm Season's generated escalation).
+   *  A boolean true is still accepted for the old endless call. */
+  function reset(difficultyId = 'tempest', mode = 'campaign') {
     clearEntities(entities);
     state.difficulty = DIFFICULTIES[difficultyId] || DIFFICULTIES.tempest;
-    state.endless = endless; state.endlessCycle = 0;
+    const m = mode === true ? 'endless' : mode;
+    state.endless = m === 'endless';
+    state.season = m === 'season';
+    state.seasonLevel = 0;
+    state.endlessCycle = 0;
     kite.x = FIELD.width / 2; kite.y = 330; kite.vx = 0; kite.vy = 0;
     kite.maxHull = Math.round(KITE.hull * state.difficulty.hullMul);
     kite.hull = kite.maxHull; kite.catcher = KITE.catcher;
@@ -158,7 +230,7 @@ export function createWorld(random) {
     state.elapsed = 0; state.shake = 0; state.flash = 0;
     state.stats = { stormsCleared: 0, bossHits: 0, bestChain: 0, goldCaught: 0, droneCatches: 0 };
     state.over = false; state.victory = false; state.failReason = '';
-    startStorm(0);
+    if (state.season) startSeasonStorm(0); else startStorm(0);
   }
 
   function rollDraft() {
@@ -265,6 +337,16 @@ export function createWorld(random) {
     if (telegraph.gold && state.upgrades.cells) charge += 2 * state.upgrades.cells;
     charge = Math.round(charge * frac);
     if (!state.storm.boss) state.battery = Math.min(state.quota, state.battery + charge);
+    // Chain Dynamo: while the chain runs hot, harvests leak extra charge
+    // straight into the batteries — routing for chains now pays the quota too.
+    if (!state.storm.boss && state.upgrades.dynamo && state.harvestChain >= 5) {
+      state.battery = Math.min(state.quota, state.battery + 3 * state.upgrades.dynamo);
+    }
+    // Gilded Rod: a golden catch feeds the chain, stretching its window.
+    if (telegraph.gold && state.upgrades.gilded) {
+      const win = state.upgrades.lattice ? CHAIN.latticeWindow : CHAIN.window;
+      state.chainTimer = Math.min(win, state.chainTimer + 1.5 * state.upgrades.gilded);
+    }
     const surge = 1 + (state.upgrades.surge || 0) * 0.5;
     const gained = Math.round(STRIKE.score * surge * chainMultiplier(state.harvestChain)
       * state.difficulty.scoreMul * (telegraph.mega ? 2 : 1) * (telegraph.gold ? GOLD.scoreMul : 1) * frac);
@@ -332,11 +414,13 @@ export function createWorld(random) {
       events |= bankHarvest(telegraph, 1, dFork2 < d2 ? fp.x : telegraph.x, dFork2 < d2 ? fp.y : telegraph.y);
       return events;
     }
-    // No kite catch — a drone may still bank it at half value.
+    // No kite catch — a drone may still bank it (half value, or 75% with
+    // the Swarm Protocol's wider, richer catchers).
+    const droneRadius = DRONE.radius + (state.upgrades.swarm ? 16 : 0);
     for (const d of state.dronePos) {
-      if (dist2(d.x, d.y, telegraph.x, telegraph.y) <= DRONE.radius * DRONE.radius
-        || (fp && dist2(d.x, d.y, fp.x, fp.y) <= DRONE.radius * DRONE.radius)) {
-        events |= bankHarvest(telegraph, DRONE.chargeFrac, d.x, d.y);
+      if (dist2(d.x, d.y, telegraph.x, telegraph.y) <= droneRadius * droneRadius
+        || (fp && dist2(d.x, d.y, fp.x, fp.y) <= droneRadius * droneRadius)) {
+        events |= bankHarvest(telegraph, state.upgrades.swarm ? 0.75 : DRONE.chargeFrac, d.x, d.y);
         return events;
       }
     }
@@ -356,6 +440,7 @@ export function createWorld(random) {
     addFloater(entities, FIELD.width / 2, 250, `STORM CLEARED! +${timeBonus + 250}`, '#69e58a', 30);
     spawnRing(entities, FIELD.width / 2, 330, 320, '#69e58a', 4, 0.8);
     spawnRing(entities, FIELD.width / 2, 330, 200, '#ffe45e', 3, 0.6);
+    if (state.season) { rollDraft(); events |= EVENT_DRAFT; return events; }
     if (state.stormIndex >= STORMS.length - 1) { /* boss handled separately */ }
     if (state.endless && state.stormIndex === STORMS.length - 2) {
       state.endlessCycle += 1; startStorm(2 + (state.endlessCycle % 4)); return events;
@@ -367,8 +452,28 @@ export function createWorld(random) {
     return events;
   }
 
+  /** A Season Supercell kill is a milestone, not an ending: a big score
+   *  bonus, the victory fireworks, a draft — and the season deepens. The
+   *  run ends only when the sky wins. */
+  function seasonBossDown() {
+    state.stats.stormsCleared += 1;
+    const bonus = Math.round((1200 + state.seasonLevel * 100) * state.difficulty.scoreMul);
+    state.score += bonus;
+    boss.active = false;
+    burstParticles(entities, random, boss.x, boss.y, 120, '#c792ff', 520, 1.4, 5, 200);
+    burstParticles(entities, random, boss.x, boss.y, 80, '#ffe45e', 420, 1.2, 4, 120);
+    spawnRing(entities, boss.x, boss.y, 340, '#c792ff', 6, 1.0);
+    spawnRing(entities, boss.x, boss.y, 220, '#ffe45e', 4, 0.8);
+    addFloater(entities, FIELD.width / 2, 250, `SUPERCELL DOWN! +${bonus} — THE SEASON DEEPENS`, '#c792ff', 28);
+    rollDraft();
+    return EVENT_STORM_CLEAR | EVENT_DRAFT;
+  }
+
   /** Advance from the draft into the next storm (called by main after a pick). */
-  function nextStorm() { startStorm(Math.min(STORMS.length - 1, state.stormIndex + 1)); }
+  function nextStorm() {
+    if (state.season) { startSeasonStorm(state.seasonLevel + 1); return; }
+    startStorm(Math.min(STORMS.length - 1, state.stormIndex + 1));
+  }
 
   /**
    * One fixed step. `input` = { x, y, dash, pointer:{x,y,down}|null }.
@@ -382,6 +487,7 @@ export function createWorld(random) {
     if (state.flash > 0) state.flash = Math.max(0, state.flash - dt * 2.2);
     if (state.shake > 0) state.shake = Math.max(0, state.shake - dt * 34);
     if (boss.flash > 0) boss.flash -= dt;
+    if (boss.enterT > 0) boss.enterT = Math.max(0, boss.enterT - dt);
     state.windPhase += dt * 0.35;
     state.wind = Math.sin(state.windPhase) * state.storm.wind;
 
@@ -402,7 +508,7 @@ export function createWorld(random) {
       if (state.timeLeft <= 0) {
         state.timeLeft = 0;
         if (state.storm.boss) { state.over = true; state.endAt = state.elapsed; state.failReason = 'The Supercell outlasted you.'; events |= EVENT_OVER; }
-        else if (state.battery < state.quota) { state.over = true; state.endAt = state.elapsed; state.failReason = `The town went dark — quota missed in ${state.storm.name}.`; events |= EVENT_OVER; }
+        else if (state.battery < state.quota) { state.over = true; state.endAt = state.elapsed; state.failReason = state.season ? `The season ended at depth ${state.seasonLevel + 1} — quota missed in ${state.storm.name}.` : `The town went dark — quota missed in ${state.storm.name}.`; events |= EVENT_OVER; }
       }
     }
 
@@ -473,9 +579,10 @@ export function createWorld(random) {
       if (state.strikeT <= 0) {
         const fast = state.storm.miniboss || boss.active;
         // Telegraphs shorten slightly with each storm and again at the peak,
-        // so late runs demand faster reads than early ones.
-        const teleMul = (1 - state.stormIndex * 0.03) * (state.peakAnnounced ? 0.92 : 1);
-        const gold = random() < GOLD.chance;
+        // so late runs demand faster reads than early ones. The index is
+        // clamped so deep Season runs stay hard but never unreadable.
+        const teleMul = (1 - Math.min(state.stormIndex, 8) * 0.03) * (state.peakAnnounced ? 0.92 : 1);
+        const gold = random() < GOLD.chance + (state.upgrades.gilded || 0) * 0.06;
         const fork = !gold && random() < state.storm.fork;
         const base = gold ? GOLD.telegraph : (fast ? STRIKE.telegraphFast : STRIKE.telegraph * range(random, 0.9, 1.2));
         const t = spawnTelegraph(entities, random, base * teleMul, false, { gold, fork });
@@ -502,8 +609,10 @@ export function createWorld(random) {
           boss.barrageT = boss.hp >= 3 ? BOSS.barrageEvery : (boss.hp === 2 ? BOSS.barragePhase1 : BOSS.barragePhase2);
         }
         // Column lash (phase 1+): the eye marks the kite's position and a
-        // lightning column falls there a second later.
-        if (boss.hp < BOSS.hp) {
+        // lightning column falls there a second later. Tied to the eye
+        // being open (hp <= 2) so Season rematches with more integrity
+        // lash only in their final phase, exactly like the campaign.
+        if (boss.hp <= 2) {
           boss.lashT -= dt;
           if (boss.lashT <= 0) {
             const t = spawnTelegraph(entities, random, LASH.telegraph, true, { column: true });
@@ -513,6 +622,11 @@ export function createWorld(random) {
         }
         boss.tornadoT -= dt;
         if (boss.tornadoT <= 0) { spawnTornado(entities, random, boss.x); boss.tornadoT = BOSS.tornadoEvery; }
+        // One hit from death, the Supercell smoulders: smoke vents from
+        // the mass so its wounds are visible from across the field.
+        if (boss.hp === 1 && random() < dt * 7) {
+          burstParticles(entities, random, boss.x + range(random, -130, 130), boss.y + 26, 2, '#7d8296', 55, 1.2, 4, -46);
+        }
       }
       // Hazards
       if (state.storm.hail > 0) {
@@ -547,6 +661,7 @@ export function createWorld(random) {
     // --- Storm / boss outcomes ---------------------------------------------------
     if (!harmless && !state.over && !state.victory) {
       if (boss.active && boss.hp <= 0) {
+        if (state.season) { events |= seasonBossDown(); return events; }
         state.victory = true; state.endAt = state.elapsed; state.score += 1000;
         burstParticles(entities, random, boss.x, boss.y, 120, '#c792ff', 520, 1.4, 5, 200);
         burstParticles(entities, random, boss.x, boss.y, 80, '#ffe45e', 420, 1.2, 4, 120);

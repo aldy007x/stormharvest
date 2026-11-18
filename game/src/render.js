@@ -29,7 +29,8 @@ export function getButtons(screen, state) {
   if (screen === SCREEN_TITLE) {
     const ids = Object.keys(DIFFICULTIES);
     ids.forEach((id, i) => buttons.push({ id: 'diff:' + id, x: 340 + i * 208, y: 512, w: 192, h: 52, label: DIFFICULTIES[id].label }));
-    buttons.push({ id: 'endless', x: 490, y: 578, w: 300, h: 46, label: state.endlessUnlocked ? '▶  ENDLESS MODE' : '🔒 ENDLESS — win once to unlock' });
+    buttons.push({ id: 'endless', x: 340, y: 578, w: 300, h: 46, label: state.endlessUnlocked ? '▶  ENDLESS MODE' : '🔒 ENDLESS — win once to unlock' });
+    buttons.push({ id: 'season', x: 640, y: 578, w: 300, h: 46, label: '🌩  STORM SEASON' });
   } else if (screen === SCREEN_DRAFT) {
     state.draftChoices.forEach((choice, i) => buttons.push({ id: 'upgrade:' + choice.id, x: 92 + i * 380, y: 250, w: 340, h: 250, label: choice.name }));
   } else if (screen === SCREEN_OVER || screen === SCREEN_VICTORY) {
@@ -83,6 +84,15 @@ export function createRenderer(canvas) {
     // Each storm washes the sky with its own tint (amber front, violet
     // cyclones, drowning blue…) so no two storms look alike.
     if (state.storm.tint) { ctx.fillStyle = state.storm.tint; ctx.fillRect(0, 0, FIELD.width, FIELD.horizonY + 4); }
+    // Stars in the high sky: faint in the early storms, brighter as the
+    // sky darkens, each twinkling on its own slow phase.
+    for (let i = 0; i < 70; i += 1) {
+      const sx = seeded(i * 41) * FIELD.width;
+      const sy = seeded(i * 43) * 300;
+      const tw = 0.3 + 0.7 * (0.5 + 0.5 * Math.sin(state.elapsed * (0.8 + seeded(i * 7) * 1.6) + i * 2.3));
+      ctx.fillStyle = `rgba(220,230,255,${(tw * (0.25 + dark * 0.6)).toFixed(3)})`;
+      ctx.fillRect(sx, sy, 2, 2);
+    }
     // A bruised moon behind the clouds in late storms.
     ctx.fillStyle = 'rgba(230,235,255,0.5)';
     ctx.beginPath(); ctx.arc(1085, 96, 30, 0, Math.PI * 2); ctx.fill();
@@ -104,7 +114,7 @@ export function createRenderer(canvas) {
     }
   }
 
-  function seaAndTown(state) {
+  function seaAndTown(state, screen) {
     // Sea with animated wave glints.
     const grad = ctx.createLinearGradient(0, FIELD.horizonY, 0, FIELD.height);
     grad.addColorStop(0, PALETTE.sea1); grad.addColorStop(1, PALETTE.sea2);
@@ -115,6 +125,20 @@ export function createRenderer(canvas) {
       const wy = FIELD.horizonY + 12 + seeded(i * 7) * 52;
       ctx.beginPath(); ctx.moveTo(wx, wy); ctx.lineTo(wx + 26 + seeded(i) * 30, wy); ctx.stroke();
     }
+    // The moon's reflection: a broken column of brighter glints under the
+    // moon, so the sea has a light source and not just texture.
+    ctx.strokeStyle = 'rgba(215,228,255,0.4)';
+    for (let i = 0; i < 10; i += 1) {
+      const gx = 1085 + (seeded(i * 53) - 0.5) * (60 + i * 9) + Math.sin(state.elapsed * 2 + i * 1.7) * 7;
+      const gy = FIELD.horizonY + 10 + i * 6.5;
+      ctx.beginPath(); ctx.moveTo(gx, gy); ctx.lineTo(gx + 16 + seeded(i * 59) * 24, gy); ctx.stroke();
+    }
+    // A far headland ridge on the horizon: one jagged silhouette line of
+    // depth between the sky and the town.
+    ctx.fillStyle = 'rgba(9,13,26,0.8)';
+    ctx.beginPath(); ctx.moveTo(0, FIELD.horizonY + 2);
+    for (let x = 0; x <= FIELD.width; x += 64) ctx.lineTo(x, FIELD.horizonY - 5 - seeded(x * 0.37) * 22);
+    ctx.lineTo(FIELD.width, FIELD.horizonY + 2); ctx.closePath(); ctx.fill();
     // Coastal town silhouette: houses with lit windows along the shore.
     ctx.fillStyle = PALETTE.town;
     ctx.fillRect(0, FIELD.groundY, FIELD.width, FIELD.height - FIELD.groundY);
@@ -129,6 +153,21 @@ export function createRenderer(canvas) {
           ctx.fillRect(hx + 8 + wnd * 13, FIELD.groundY - hh + 10 + (wnd % 2) * 12, 7, 9);
           ctx.fillStyle = PALETTE.town;
         }
+      }
+      // Skyline variety: a water tower on some rooftops, a blinking
+      // antenna on others — the town reads as built, not stamped.
+      ctx.fillStyle = PALETTE.town;
+      if (i % 5 === 2) {
+        ctx.fillRect(hx + 15, FIELD.groundY - hh - 24, 16, 13);
+        ctx.beginPath(); ctx.moveTo(hx + 13, FIELD.groundY - hh - 24); ctx.lineTo(hx + 23, FIELD.groundY - hh - 31); ctx.lineTo(hx + 33, FIELD.groundY - hh - 24); ctx.fill();
+        ctx.fillRect(hx + 17, FIELD.groundY - hh - 11, 3, 11); ctx.fillRect(hx + 26, FIELD.groundY - hh - 11, 3, 11);
+      }
+      if (i % 3 === 0) {
+        ctx.fillRect(hx + 22, FIELD.groundY - hh - 26, 2, 13);
+        const blink = Math.sin(state.elapsed * 2.4 + i * 1.3) > 0.2 ? 0.95 : 0.15;
+        ctx.fillStyle = `rgba(255,90,90,${blink})`;
+        ctx.beginPath(); ctx.arc(hx + 23, FIELD.groundY - hh - 28, 2.6, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = PALETTE.town;
       }
     }
     // Three battery towers, spread along the skyline (15% / 50% / 85% of the
@@ -149,7 +188,8 @@ export function createRenderer(canvas) {
       ctx.beginPath(); ctx.arc(cx, base - hgt - 7, 6, 0, Math.PI * 2); ctx.fill();
     });
     // Label above the middle tower, in open sky — never over the HUD bars.
-    text('TOWN BATTERIES', FIELD.width * 0.5, FIELD.groundY - 24 - 86 - 22, 13, PALETTE.muted, 'center', '700');
+    // Skipped on the title screen, where the menu text sits in the same spot.
+    if (screen !== SCREEN_TITLE) text('TOWN BATTERIES', FIELD.width * 0.5, FIELD.groundY - 24 - 86 - 22, 13, PALETTE.muted, 'center', '700');
   }
 
   function rainLayer(state) {
@@ -302,7 +342,11 @@ export function createRenderer(canvas) {
     const boss = state.boss;
     if (!boss.active || state.victory) return;
     const flash = boss.flash > 0;
-    const x = boss.x; const y = boss.y; const t = state.elapsed;
+    const x = boss.x; const t = state.elapsed;
+    // Entrance: the Supercell descends out of the top of the sky over its
+    // first second, easing into its fighting altitude.
+    const enterP = boss.enterT > 0 ? 1 - boss.enterT / 1.15 : 1;
+    const y = boss.y - (1 - enterP) * (1 - enterP) * 215;
     // Purple under-glow spilling from the belly of the cloud.
     const glow = ctx.createRadialGradient(x, y + 84, 12, x, y + 84, 240);
     glow.addColorStop(0, 'rgba(168,96,255,0.32)'); glow.addColorStop(1, 'rgba(168,96,255,0)');
@@ -354,17 +398,30 @@ export function createRenderer(canvas) {
       ctx.beginPath(); ctx.arc(x, y + 10, r, start, start + 1.85); ctx.stroke();
     }
     ctx.restore();
-    // The great glowing eye: halo, iris, hot core, spark.
+    // The great glowing eye: halo, iris, hot core, spark. The iris tracks
+    // the kite — the Supercell is always watching where you fly.
     const pulse = 0.72 + Math.sin(t * 5) * 0.28;
+    const lookX = Math.max(-7, Math.min(7, (state.kite.x - x) * 0.02));
+    const lookY = Math.max(-4, Math.min(4, (state.kite.y - (y + 16)) * 0.012));
     const eyeGlow = ctx.createRadialGradient(x, y + 16, 4, x, y + 16, 72);
     eyeGlow.addColorStop(0, `rgba(255,96,64,${0.85 * pulse})`); eyeGlow.addColorStop(1, 'rgba(255,60,40,0)');
     ctx.fillStyle = eyeGlow; ctx.beginPath(); ctx.arc(x, y + 16, 72, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#ff6a4d'; ctx.beginPath(); ctx.arc(x, y + 16, 24, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#ffd23e'; ctx.beginPath(); ctx.arc(x, y + 16, 12, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = '#fff6ec'; ctx.beginPath(); ctx.arc(x, y + 16, 4.5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ff6a4d'; ctx.beginPath(); ctx.arc(x + lookX, y + 16 + lookY, 24, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#ffd23e'; ctx.beginPath(); ctx.arc(x + lookX, y + 16 + lookY, 12, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#fff6ec'; ctx.beginPath(); ctx.arc(x + lookX, y + 16 + lookY, 4.5, 0, Math.PI * 2); ctx.fill();
     if (flash) {
       ctx.fillStyle = 'rgba(200,160,255,0.30)';
       ctx.beginPath(); ctx.ellipse(x, y + 8, 200, 88, 0, 0, Math.PI * 2); ctx.fill();
+    }
+    // One hit from death, embers tear off the mass and climb.
+    if (boss.hp === 1) {
+      for (let i = 0; i < 9; i += 1) {
+        const ph = Math.floor(t * 9) + i * 7;
+        const ex = x + (seeded(ph * 3) - 0.5) * 300;
+        const ey = y + 78 - ((t * 34 + i * 13) % 52);
+        ctx.fillStyle = `rgba(255,${140 + Math.floor(seeded(ph) * 80)},60,${0.35 + seeded(ph * 7) * 0.4})`;
+        ctx.fillRect(ex, ey, 3, 3);
+      }
     }
     void BOSS;
   }
@@ -372,6 +429,27 @@ export function createRenderer(canvas) {
   function kiteDraw(state) {
     const k = state.kite;
     const s = k.scale || 1; // staged scenes (cover) may pose a larger hero kite
+    // Flight feel: a warm engine glow under the sail that swells with
+    // speed, and wind streaks streaming past once you are really moving —
+    // velocity you can see, not just feel.
+    const spd = Math.hypot(k.vx || 0, k.vy || 0);
+    const glow = ctx.createRadialGradient(k.x, k.y, 2, k.x, k.y, 30 + spd * 0.06);
+    glow.addColorStop(0, `rgba(255,190,80,${0.10 + Math.min(0.16, spd * 0.0004)})`);
+    glow.addColorStop(1, 'rgba(255,190,80,0)');
+    ctx.fillStyle = glow;
+    ctx.beginPath(); ctx.arc(k.x, k.y, 30 + spd * 0.06, 0, Math.PI * 2); ctx.fill();
+    if (spd > 190) {
+      const ux = -k.vx / spd; const uy = -k.vy / spd;
+      ctx.strokeStyle = 'rgba(160,210,255,0.35)'; ctx.lineWidth = 2;
+      for (let i = -1; i <= 1; i += 1) {
+        const px = -uy * i * 10; const py = ux * i * 10;
+        const len = (spd - 170) * 0.16;
+        ctx.beginPath();
+        ctx.moveTo(k.x + px + ux * 22, k.y + py + uy * 22);
+        ctx.lineTo(k.x + px + ux * (22 + len), k.y + py + uy * (22 + len));
+        ctx.stroke();
+      }
+    }
     if (k.invulnerable > 0 && Math.floor(state.elapsed * 14) % 2 === 0 && k.dashT <= 0) { /* blink */ }
     else {
       ctx.save(); ctx.translate(k.x, k.y); ctx.scale(k.facing * s, s);
@@ -411,10 +489,11 @@ export function createRenderer(canvas) {
   /** Harvest drones: little rotor craft holding their orbit around the kite,
    *  each with its own faint catcher ring so their coverage reads at a glance. */
   function dronesDraw(state) {
+    const droneRadius = DRONE.radius + (state.upgrades.swarm ? 16 : 0);
     for (const d of state.dronePos) {
       ctx.strokeStyle = 'rgba(143,208,255,0.30)'; ctx.lineWidth = 1.5;
       ctx.setLineDash([4, 7]);
-      ctx.beginPath(); ctx.arc(d.x, d.y, DRONE.radius, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(d.x, d.y, droneRadius, 0, Math.PI * 2); ctx.stroke();
       ctx.setLineDash([]);
       ctx.save(); ctx.translate(d.x, d.y);
       // Rotor blur arcs spinning with the orbit phase.
@@ -473,8 +552,8 @@ export function createRenderer(canvas) {
     const stripH = state.storm.boss ? 92 : 64;
     ctx.fillStyle = 'rgba(8,12,26,0.72)'; ctx.fillRect(0, 0, FIELD.width, stripH);
     ctx.fillStyle = 'rgba(255,255,255,0.12)'; ctx.fillRect(0, stripH, FIELD.width, 1);
-    text(`STORM ${state.stormIndex + 1}/7 — ${state.storm.name}`, 22, 28, 20, PALETTE.text, 'left', '800');
-    text(state.endless ? `ENDLESS CYCLE ${state.endlessCycle + 1} · ${state.difficulty.label}` : state.difficulty.label, 22, 52, 14, PALETTE.muted, 'left', '600');
+    text(state.season ? `SEASON DEPTH ${state.seasonLevel + 1} — ${state.storm.name}` : `STORM ${state.stormIndex + 1}/7 — ${state.storm.name}`, 22, 28, 20, PALETTE.text, 'left', '800');
+    text(state.season ? `STORM SEASON · ${state.difficulty.label}` : (state.endless ? `ENDLESS CYCLE ${state.endlessCycle + 1} · ${state.difficulty.label}` : state.difficulty.label), 22, 52, 14, PALETTE.muted, 'left', '600');
     // Quota / boss centrepiece.
     if (state.storm.boss) {
       // Boss header stack, one element per row, all inside the taller strip:
@@ -532,7 +611,7 @@ export function createRenderer(canvas) {
       ctx.globalAlpha = a;
       ctx.fillStyle = 'rgba(8,12,26,0.66)'; ctx.fillRect(290, 120, 700, 92);
       ctx.strokeStyle = PALETTE.panelEdge; ctx.strokeRect(290, 120, 700, 92);
-      text(`STORM ${state.stormIndex + 1} OF 7`, FIELD.width / 2, 152, 17, PALETTE.gold, 'center', '800');
+      text(state.season ? `SEASON — DEPTH ${state.seasonLevel + 1}` : `STORM ${state.stormIndex + 1} OF 7`, FIELD.width / 2, 152, 17, PALETTE.gold, 'center', '800');
       text(state.storm.name, FIELD.width / 2, 188, 34, PALETTE.text, 'center', '900');
       if (state.storm.tag) text(state.storm.tag, FIELD.width / 2, 206, 14.5, PALETTE.muted, 'center', '600');
       ctx.globalAlpha = 1;
@@ -567,9 +646,11 @@ export function createRenderer(canvas) {
       'Dodge hail, gusts and tornadoes. Between storms, draft 1 of 3 upgrades',
       '— even a Harvest Drone that catches rings for you. Storm 7: THE SUPERCELL.',
       'Harvest its mega-bolts, charge the Storm Lance, SPACE to fire. 3 hits win.',
+      'Or brave the STORM SEASON: endless new storms, rematch bosses,',
+      'one long score chase that ends only when the sky wins.',
       'Fly: WASD / arrows or hold mouse · Dash: Shift · Pause: P · Mute: M',
     ];
-    lines.forEach((line, i) => text(line, FIELD.width / 2, 306 + i * 19.5, 15, PALETTE.muted, 'center'));
+    lines.forEach((line, i) => text(line, FIELD.width / 2, 304 + i * 18.5, 15, PALETTE.muted, 'center'));
     text(best > 0 ? `Best score: ${best}` : 'Choose your sky:', FIELD.width / 2, 498, 16, PALETTE.muted, 'center', '700');
     for (const b of getButtons(SCREEN_TITLE, state)) button(b, b.id.startsWith('diff') ? PALETTE.battery : PALETTE.lance);
     text('Calm = gentler · Tempest = the real storm · Maelstrom = for maniacs', FIELD.width / 2, 652, 14, PALETTE.dim, 'center');
@@ -579,7 +660,7 @@ export function createRenderer(canvas) {
   function draftScreen(state) {
     ctx.fillStyle = 'rgba(5,8,18,0.62)'; ctx.fillRect(0, 0, FIELD.width, FIELD.height);
     text('STORM CLEARED — THE TOWN STILL GLOWS', FIELD.width / 2, 128, 30, PALETTE.hull, 'center', '900');
-    text(`Choose 1 upgrade before ${STORMS[Math.min(6, state.stormIndex + 1)].name}  ·  click a card or press 1–3`, FIELD.width / 2, 164, 18, PALETTE.muted, 'center');
+    text(state.season ? `Choose 1 upgrade — then the season deepens (depth ${state.seasonLevel + 2})  ·  click a card or press 1–3` : `Choose 1 upgrade before ${STORMS[Math.min(6, state.stormIndex + 1)].name}  ·  click a card or press 1–3`, FIELD.width / 2, 164, 18, PALETTE.muted, 'center');
     state.draftChoices.forEach((choice, i) => {
       const b = getButtons(SCREEN_DRAFT, state)[i];
       const hot = inside(b);
@@ -621,14 +702,14 @@ export function createRenderer(canvas) {
     const rows = [
       ['Final score', String(state.score)],
       ['Best score', String(Math.max(best, state.score))],
-      ['Storms cleared', `${state.stats.stormsCleared} / 7`],
+      ['Storms cleared', state.season ? `${state.stats.stormsCleared} (reached depth ${state.seasonLevel + 1})` : `${state.stats.stormsCleared} / 7`],
       ['Bolts harvested', String(state.harvests)],
       ['Best harvest chain', `×${state.stats.bestChain}`],
       ['Golden strikes caught', String(state.stats.goldCaught)],
       ['Drone catches', String(state.stats.droneCatches)],
       ['Supercell hits', String(state.stats.bossHits)],
       ['Hits taken', String(state.hitsTaken)],
-      ['Difficulty', state.difficulty.label + (state.endless ? ' · Endless' : '')],
+      ['Difficulty', state.difficulty.label + (state.season ? ' · Storm Season' : (state.endless ? ' · Endless' : ''))],
     ];
     rows.forEach((row, i) => {
       text(row[0], 420, 282 + i * 24, 16, PALETTE.muted, 'left');
@@ -655,7 +736,7 @@ export function createRenderer(canvas) {
     sky(state);
     clouds(state, 0); clouds(state, 1);
     bossDraw(state);
-    seaAndTown(state);
+    seaAndTown(state, screen);
     telegraphs(state);
     hazards(state);
     dronesDraw(state);

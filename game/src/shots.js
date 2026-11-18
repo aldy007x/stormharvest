@@ -55,7 +55,7 @@ export function stageShot(name, world) {
     state.battery = 62; state.score = 4850; state.harvests = 41; state.hitsTaken = 3;
     state.timeLeft = 47; state.bannerT = 0; state.elapsed = 26;
     state.kite.x = 560; state.kite.y = 330; state.kite.hull = 82;
-    world.applyUpgrade('catcher'); world.applyUpgrade('battery'); world.applyUpgrade('sails'); world.applyUpgrade('drone');
+    world.applyUpgrade('catcher'); world.applyUpgrade('battery'); world.applyUpgrade('sails'); world.applyUpgrade('drone'); world.applyUpgrade('dynamo'); world.applyUpgrade('gilded');
     state.draftChoices = [];
     // A combo chain in full flow, so the HUD shows the multiplier meter.
     state.harvestChain = 7; state.chainTimer = 3.4;
@@ -82,6 +82,7 @@ export function stageShot(name, world) {
     world.applyUpgrade('catcher'); world.applyUpgrade('lance'); world.applyUpgrade('hull'); world.applyUpgrade('dash');
     state.draftChoices = []; state.kite.hull = 57;
     settle(world, 0.5);
+    state.boss.enterT = 0; // the Supercell sits at fighting altitude in this frame, entrance finished
     for (const f of e.floaters) f.active = false; // no stray announcements in the boss frame
     // Mega-bolt barrage ringing the Supercell + one normal ring near the kite.
     const megas = [[520, 250, 0.4], [880, 290, 0.65], [700, 430, 0.2], [1020, 180, 0.8]];

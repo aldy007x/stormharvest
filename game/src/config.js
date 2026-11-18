@@ -109,6 +109,21 @@ export const PALETTE = {
 export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif';
 export const BEST_KEY = 'stormharvest.best';
 export const WIN_KEY = 'stormharvest.won';
+export const SEASON_KEY = 'stormharvest.seasonBest';
+
+/** Storm Season (the endless escalation mode): storms are generated from
+ *  the authored templates and scaled by depth — quotas grow, cadence
+ *  quickens, hail thickens, the sky darkens — and every `bossEvery`-th
+ *  storm is a Supercell rematch that gains +1 integrity per appearance. */
+export const SEASON = {
+  bossEvery: 5,
+  quotaGrowth: 0.14,   // +14% quota per depth level
+  cadenceDecay: 0.97,  // strike interval ×0.97 per level (floored in world.js)
+  timeLoss: 1.5,       // seconds shaved off each storm clock per level
+  hailGrowth: 0.08,
+  darkGrowth: 0.03,
+  forkGrowth: 0.01,
+};
 
 /** Pool sizes, allocated once at boot so play never allocates in the hot loop. */
 export const POOLS = { telegraphs: 28, bolts: 28, hail: 90, gusts: 10, tornadoes: 6, particles: 420, floaters: 24, rain: 170, clouds: 26, rings: 24 };
